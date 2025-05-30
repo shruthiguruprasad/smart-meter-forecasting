@@ -1,0 +1,81 @@
+# 🔧 Smart Meter Forecasting Configuration
+# ==========================================
+
+# Data Configuration
+data:
+  path: "/kaggle/input/smart-meters-in-london/"
+  missing_threshold: 0.2
+  min_days_per_household: 30
+  
+# Feature Engineering
+features:
+  horizons: [1, 7, 30]
+  lag_days: [1, 2, 3, 7, 14, 30]
+  rolling_windows: [3, 7, 14, 30]
+  include_weather: true
+  include_holidays: true
+  include_household_info: true
+
+# Model Configuration
+models:
+  prophet:
+    daily_seasonality: true
+    weekly_seasonality: true
+    yearly_seasonality: true
+    seasonality_mode: "multiplicative"
+    changepoint_prior_scale: 0.05
+    
+  xgboost:
+    n_estimators: 1000
+    max_depth: 6
+    learning_rate: 0.1
+    subsample: 0.8
+    colsample_bytree: 0.8
+    random_state: 42
+    
+  lightgbm:
+    n_estimators: 1000
+    max_depth: 6
+    learning_rate: 0.1
+    subsample: 0.8
+    colsample_bytree: 0.8
+    random_state: 42
+    
+  lstm:
+    units: [64, 32]
+    dropout: 0.2
+    batch_size: 32
+    epochs: 100
+    patience: 10
+
+# Evaluation
+evaluation:
+  test_size: 0.2
+  cv_splits: 5
+  cv_test_size: 30
+  metrics: ["mae", "rmse", "mape", "r2"]
+
+# Visualization
+visualization:
+  figsize: [12, 8]
+  style: "seaborn"
+  save_plots: true
+  plot_dir: "plots/"
+
+# Clustering (for load shape analysis)
+clustering:
+  n_clusters: 8
+  algorithm: "kmeans"
+  features: ["consumption", "temporal", "weather"]
+  
+# Paths
+paths:
+  data_dir: "data/"
+  models_dir: "models/"
+  results_dir: "results/"
+  plots_dir: "plots/"
+  
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s" 
