@@ -18,6 +18,7 @@ import shap
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import cross_val_score
+from sklearn.preprocessing import LabelEncoder
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -69,9 +70,38 @@ def prepare_modeling_data(df: pd.DataFrame,
     
     print(f"🧹 Cleaned data: {initial_rows:,} → {final_rows:,} rows ({initial_rows-final_rows:,} removed)")
     
+    # Handle categorical variables - encode to numerical
+    categorical_encodings = {}
+    
+    for col in feature_cols:
+        if col in model_data.columns and model_data[col].dtype == 'object':
+            print(f"🔄 Encoding categorical variable: {col}")
+            # Use label encoding for categorical variables
+            encoder = LabelEncoder()
+            model_data[col] = encoder.fit_transform(model_data[col].astype(str))
+            categorical_encodings[col] = encoder
+    
+    print(f"🔢 Encoded {len(categorical_encodings)} categorical variables")
+    
     # Prepare features and target
     X = model_data[feature_cols]
     y = model_data[target_col]
+    
+    # Ensure all features are numeric
+    for col in X.columns:
+        if X[col].dtype == 'object':
+            print(f"⚠️  Converting remaining object column to numeric: {col}")
+            X[col] = pd.to_numeric(X[col], errors='coerce')
+    
+    # Remove any remaining NaN values after conversion
+    initial_samples = len(X)
+    mask = ~(X.isna().any(axis=1) | y.isna())
+    X = X[mask]
+    y = y[mask]
+    final_samples = len(X)
+    
+    if final_samples < initial_samples:
+        print(f"🧹 Removed {initial_samples - final_samples} samples with NaN after encoding")
     
     # Train/test split (random for Stage 0 analysis)
     X_train, X_test, y_train, y_test = train_test_split(
@@ -105,7 +135,8 @@ def prepare_modeling_data(df: pd.DataFrame,
         'y_test': y_test,
         'feature_cols': feature_cols,
         'feature_groups': feature_groups,
-        'target_col': target_col
+        'target_col': target_col,
+        'categorical_encodings': categorical_encodings
     }
 
 def train_xgboost_model(data_dict: dict, 
