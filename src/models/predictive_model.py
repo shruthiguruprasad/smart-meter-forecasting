@@ -20,6 +20,9 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import cross_val_score
 from sklearn.preprocessing import LabelEncoder
 import warnings
+import optuna
+from optuna.integration import XGBoostPruningCallback
+
 warnings.filterwarnings('ignore')
 
 def prepare_modeling_data(df: pd.DataFrame, 
@@ -139,93 +142,183 @@ def prepare_modeling_data(df: pd.DataFrame,
         'categorical_encodings': categorical_encodings
     }
 
-def train_xgboost_model(data_dict: dict, 
-                       xgb_params: dict = None) -> dict:
+def tune_hyperparameters(train_df: pd.DataFrame,
+                        val_df: pd.DataFrame,
+                        feature_cols: list,
+                        target_col: str = "total_kwh",
+                        n_trials: int = 50) -> dict:
     """
-    Train XGBoost regressor for Stage 0 predictive modeling
+    Tune XGBoost hyperparameters using Optuna with early stopping and validation set
     
     Args:
-        data_dict: Results from prepare_modeling_data
-        xgb_params: XGBoost parameters (optional)
+        train_df: Training dataframe
+        val_df: Validation dataframe
+        feature_cols: List of feature columns
+        target_col: Target variable name
+        n_trials: Number of optimization trials
         
     Returns:
-        Dictionary with trained model and performance metrics
+        Dictionary of best hyperparameters
     """
-    print("🚀 TRAINING XGBOOST MODEL FOR STAGE 0")
-    print("=" * 38)
+    print("🎯 Tuning XGBoost Hyperparameters")
+    print("=" * 40)
     
-    # Default XGBoost parameters (optimized for interpretability)
-    if xgb_params is None:
-        xgb_params = {
-            'objective': 'reg:squarederror',
+    # Prepare data
+    X_train = train_df[feature_cols]
+    y_train = train_df[target_col]
+    X_val = val_df[feature_cols]
+    y_val = val_df[target_col]
+    
+    # Create DMatrix for XGBoost
+    dtrain = xgb.DMatrix(X_train, label=y_train)
+    dval = xgb.DMatrix(X_val, label=y_val)
+    
+    def objective(trial):
+        # Define hyperparameter search space
+        params = {
+            'max_depth': trial.suggest_int('max_depth', 3, 8),
+            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3, log=True),
+            'n_estimators': trial.suggest_int('n_estimators', 100, 1000),
+            'min_child_weight': trial.suggest_int('min_child_weight', 1, 7),
+            'subsample': trial.suggest_float('subsample', 0.6, 1.0),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 1.0),
+            'gamma': trial.suggest_float('gamma', 0, 5),
+            'reg_alpha': trial.suggest_float('reg_alpha', 1e-8, 1.0, log=True),
+            'reg_lambda': trial.suggest_float('reg_lambda', 1e-8, 1.0, log=True),
+            'tree_method': 'hist',  # Use histogram-based algorithm for faster training
+            'random_state': 42
+        }
+        
+        # Train with early stopping
+        model = xgb.train(
+            params,
+            dtrain,
+            num_boost_round=params['n_estimators'],
+            evals=[(dtrain, 'train'), (dval, 'val')],
+            early_stopping_rounds=50,
+            verbose_eval=False
+        )
+        
+        # Get best validation score
+        return model.best_score
+    
+    # Create study
+    study = optuna.create_study(
+        direction='minimize',  # Minimize RMSE
+        pruner=optuna.pruners.MedianPruner(
+            n_startup_trials=5,
+            n_warmup_steps=10,
+            interval_steps=1
+        )
+    )
+    
+    # Run optimization
+    study.optimize(
+        objective,
+        n_trials=n_trials,
+        show_progress_bar=True
+    )
+    
+    # Get best parameters
+    best_params = study.best_params
+    best_params.update({
+        'tree_method': 'hist',
+        'random_state': 42
+    })
+    
+    print("\n📊 Best Hyperparameters:")
+    for param, value in best_params.items():
+        print(f"   {param}: {value}")
+    print(f"\n🎯 Best Validation RMSE: {study.best_value:.4f}")
+    
+    return best_params
+
+def train_xgboost_model(train_df: pd.DataFrame,
+                       val_df: pd.DataFrame,
+                       test_df: pd.DataFrame,
+                       feature_cols: list,
+                       target_col: str = "total_kwh",
+                       params: dict = None) -> tuple:
+    """
+    Train XGBoost model with best hyperparameters and evaluate on validation/test sets
+    
+    Args:
+        train_df: Training dataframe
+        val_df: Validation dataframe
+        test_df: Test dataframe
+        feature_cols: List of feature columns
+        target_col: Target variable name
+        params: Optional hyperparameters (if None, will use default tuned parameters)
+        
+    Returns:
+        Tuple of (trained model, validation metrics, test metrics)
+    """
+    print("🚀 Training XGBoost Model")
+    print("=" * 35)
+    
+    # Prepare data
+    X_train = train_df[feature_cols]
+    y_train = train_df[target_col]
+    X_val = val_df[feature_cols]
+    y_val = val_df[target_col]
+    X_test = test_df[feature_cols]
+    y_test = test_df[target_col]
+    
+    # Create DMatrix for XGBoost
+    dtrain = xgb.DMatrix(X_train, label=y_train)
+    dval = xgb.DMatrix(X_val, label=y_val)
+    dtest = xgb.DMatrix(X_test, label=y_test)
+    
+    # Use default parameters if none provided
+    if params is None:
+        params = {
             'max_depth': 6,
             'learning_rate': 0.1,
-            'n_estimators': 200,
+            'n_estimators': 1000,
+            'min_child_weight': 3,
             'subsample': 0.8,
             'colsample_bytree': 0.8,
-            'random_state': 42,
-            'n_jobs': -1
+            'gamma': 0,
+            'reg_alpha': 0,
+            'reg_lambda': 1,
+            'tree_method': 'hist',
+            'random_state': 42
         }
     
-    X_train = data_dict['X_train']
-    X_test = data_dict['X_test']
-    y_train = data_dict['y_train']
-    y_test = data_dict['y_test']
+    # Train model with early stopping
+    model = xgb.train(
+        params,
+        dtrain,
+        num_boost_round=params['n_estimators'],
+        evals=[(dtrain, 'train'), (dval, 'val')],
+        early_stopping_rounds=50,
+        verbose_eval=100
+    )
     
-    print(f"📊 Training on {len(X_train):,} samples with {len(data_dict['feature_cols'])} features")
-    
-    # Train XGBoost model
-    print("🎯 Training XGBoost regressor...")
-    model = xgb.XGBRegressor(**xgb_params)
-    model.fit(X_train, y_train)
-    
-    # Cross-validation for model assessment
-    print("📈 Running 5-fold cross-validation...")
-    cv_scores = cross_val_score(model, X_train, y_train, cv=5, scoring='neg_mean_absolute_error')
-    
-    # Predictions
-    y_train_pred = model.predict(X_train)
-    y_test_pred = model.predict(X_test)
+    # Make predictions
+    val_preds = model.predict(dval)
+    test_preds = model.predict(dtest)
     
     # Calculate metrics
-    train_metrics = {
-        'mae': mean_absolute_error(y_train, y_train_pred),
-        'rmse': np.sqrt(mean_squared_error(y_train, y_train_pred)),
-        'r2': r2_score(y_train, y_train_pred)
-    }
+    def calculate_metrics(y_true, y_pred):
+        return {
+            'rmse': np.sqrt(mean_squared_error(y_true, y_pred)),
+            'mae': mean_absolute_error(y_true, y_pred),
+            'r2': r2_score(y_true, y_pred)
+        }
     
-    test_metrics = {
-        'mae': mean_absolute_error(y_test, y_test_pred),
-        'rmse': np.sqrt(mean_squared_error(y_test, y_test_pred)),
-        'r2': r2_score(y_test, y_test_pred)
-    }
+    val_metrics = calculate_metrics(y_val, val_preds)
+    test_metrics = calculate_metrics(y_test, test_preds)
     
-    cv_metrics = {
-        'cv_mae_mean': -cv_scores.mean(),
-        'cv_mae_std': cv_scores.std()
-    }
+    print("\n📊 Validation Metrics:")
+    for metric, value in val_metrics.items():
+        print(f"   {metric.upper()}: {value:.4f}")
     
-    print(f"✅ MODEL TRAINING COMPLETED!")
-    print(f"📈 Train Performance:")
-    print(f"   MAE: {train_metrics['mae']:.4f} kWh")
-    print(f"   RMSE: {train_metrics['rmse']:.4f} kWh")
-    print(f"   R²: {train_metrics['r2']:.4f}")
-    print(f"📈 Test Performance:")
-    print(f"   MAE: {test_metrics['mae']:.4f} kWh")
-    print(f"   RMSE: {test_metrics['rmse']:.4f} kWh")
-    print(f"   R²: {test_metrics['r2']:.4f}")
-    print(f"📈 Cross-Validation:")
-    print(f"   CV MAE: {cv_metrics['cv_mae_mean']:.4f} ± {cv_metrics['cv_mae_std']:.4f} kWh")
+    print("\n📊 Test Metrics:")
+    for metric, value in test_metrics.items():
+        print(f"   {metric.upper()}: {value:.4f}")
     
-    return {
-        'model': model,
-        'train_metrics': train_metrics,
-        'test_metrics': test_metrics,
-        'cv_metrics': cv_metrics,
-        'xgb_params': xgb_params,
-        'y_train_pred': y_train_pred,
-        'y_test_pred': y_test_pred
-    }
+    return model, val_metrics, test_metrics
 
 def calculate_shap_values(model_dict: dict, 
                          data_dict: dict,
@@ -305,7 +398,7 @@ def run_stage0_predictive_modeling(df: pd.DataFrame,
     
     # Step 2: Train XGBoost model
     print("\n" + "="*20 + " STEP 2: MODEL TRAINING " + "="*20)
-    model_dict = train_xgboost_model(data_dict, xgb_params)
+    model_dict = train_xgboost_model(data_dict['X_train'], data_dict['X_test'], data_dict['X_test'], data_dict['feature_cols'], target_col)
     
     # Step 3: Calculate SHAP values
     print("\n" + "="*20 + " STEP 3: SHAP ANALYSIS " + "="*20)
@@ -319,8 +412,8 @@ def run_stage0_predictive_modeling(df: pd.DataFrame,
     print("✅ Ready for consumption driver analysis")
     
     # Summary statistics
-    r2_score_val = model_dict['test_metrics']['r2']
-    mae_score = model_dict['test_metrics']['mae']
+    r2_score_val = model_dict[1]['r2']
+    mae_score = model_dict[1]['mae']
     
     print(f"\n📊 QUICK SUMMARY:")
     print(f"   Model Performance (R²): {r2_score_val:.4f}")

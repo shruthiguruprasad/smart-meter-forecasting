@@ -1,5 +1,5 @@
 """
-�� FEATURE PIPELINE - Comprehensive Features for Forecasting
+FEATURE PIPELINE - Comprehensive Features for Forecasting
 ===========================================================
 
 Comprehensive feature pipeline for electricity consumption forecasting.
@@ -24,6 +24,7 @@ warnings.filterwarnings('ignore')
 def create_comprehensive_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Create comprehensive features for electricity consumption forecasting
+    (except group/household features, which are handled after splitting to avoid leakage)
     
     Args:
         df: Input dataframe with cleaned data
@@ -46,25 +47,8 @@ def create_comprehensive_features(df: pd.DataFrame) -> pd.DataFrame:
     # 4. Weather features (important external factors)
     df = create_all_weather_features(df)
     
-    # 5. ACORN socio-economic features
-    print("🏠 Creating ACORN features...")
-    if 'Acorn_grouped' in df.columns:
-        # Group-level consumption patterns
-        df["acorn_avg_consumption"] = df.groupby("Acorn_grouped")["total_kwh"].transform("mean")
-        df["acorn_consumption_ratio"] = df["total_kwh"] / (df["acorn_avg_consumption"] + 1e-6)
-        
-        # Peak behavior by ACORN group
-        df["acorn_peak_ratio"] = (
-            df.groupby("Acorn_grouped")["peak_kwh"].transform("mean") /
-            (df.groupby("Acorn_grouped")["total_kwh"].transform("mean") + 1e-6)
-        )
-        
-        # Variability by ACORN group
-        df["acorn_variability"] = df.groupby("Acorn_grouped")["daily_variability"].transform("mean")
-        df["relative_variability"] = df["daily_variability"] / (df["acorn_variability"] + 1e-6)
-    
-    # 6. Household characteristics
-    df = create_household_characteristics(df)
+    # 5. ACORN socio-economic features (REMOVED: now handled after split)
+    # 6. Household characteristics (REMOVED: now handled after split)
     
     # 7. Time series features (critical for forecasting)
     df = create_timeseries_features(df, target_col="total_kwh", lags=[1, 7, 14], windows=[7, 14])
@@ -95,11 +79,10 @@ def create_comprehensive_features(df: pd.DataFrame) -> pd.DataFrame:
         'Weather': len([c for c in df.columns if any(x in c for x in ['temp', 'heating', 'cooling', 'humidity', 'wind', 'cloud'])]),
         'Temporal': len([c for c in df.columns if any(x in c for x in ['dayofweek', 'weekend', 'month', 'season', 'holiday', 'quarter'])]),
         'Time Series': len([c for c in df.columns if any(x in c for x in ['lag', 'roll', 'delta', 'pct_change', 'weekly'])]),
-        'ACORN': len([c for c in df.columns if 'acorn' in c.lower()]),
-        'Household': len([c for c in df.columns if any(x in c for x in ['hh_avg', 'hh_std', 'hh_max', 'daily_vs'])]),
         'Interactions': len([c for c in df.columns if any(x in c for x in ['weekend_heating', 'summer_cooling', 'holiday_'])]),
         'Peak Timing': len([c for c in df.columns if any(x in c for x in ['peak_hour', 'peak_period', 'off_peak'])])
     }
+    # Note: ACORN and Household features are now handled after split
     
     print("\n📋 COMPREHENSIVE FEATURE SUMMARY:")
     total_features = sum(feature_counts.values())
@@ -161,19 +144,62 @@ def get_forecasting_features(df: pd.DataFrame) -> list:
     print(f"📊 Selected {len(feature_cols)} forecasting features")
     return feature_cols
 
+def add_group_and_household_features(train_df, test_df):
+    """
+    Add group-level (ACORN) and household-level features in a leakage-safe way.
+    Compute stats on train only, merge into both train and test.
+    """
+    # ACORN group features
+    if 'Acorn_grouped' in train_df.columns:
+        acorn_means = train_df.groupby("Acorn_grouped")["total_kwh"].mean().rename("acorn_avg_consumption")
+        train_df = train_df.merge(acorn_means, on="Acorn_grouped", how="left")
+        test_df = test_df.merge(acorn_means, on="Acorn_grouped", how="left")
+        train_df["acorn_consumption_ratio"] = train_df["total_kwh"] / (train_df["acorn_avg_consumption"] + 1e-6)
+        test_df["acorn_consumption_ratio"] = test_df["total_kwh"] / (test_df["acorn_avg_consumption"] + 1e-6)
+        # Peak behavior by ACORN group
+        acorn_peak = train_df.groupby("Acorn_grouped")["peak_kwh"].mean().rename("acorn_peak_kwh")
+        acorn_total = train_df.groupby("Acorn_grouped")["total_kwh"].mean().rename("acorn_total_kwh")
+        acorn_peak_ratio = (acorn_peak / (acorn_total + 1e-6)).rename("acorn_peak_ratio")
+        train_df = train_df.merge(acorn_peak_ratio, on="Acorn_grouped", how="left")
+        test_df = test_df.merge(acorn_peak_ratio, on="Acorn_grouped", how="left")
+        # Variability by ACORN group
+        acorn_var = train_df.groupby("Acorn_grouped")["daily_variability"].mean().rename("acorn_variability")
+        train_df = train_df.merge(acorn_var, on="Acorn_grouped", how="left")
+        test_df = test_df.merge(acorn_var, on="Acorn_grouped", how="left")
+        train_df["relative_variability"] = train_df["daily_variability"] / (train_df["acorn_variability"] + 1e-6)
+        test_df["relative_variability"] = test_df["daily_variability"] / (test_df["acorn_variability"] + 1e-6)
+    # Household-level features
+    if 'LCLid' in train_df.columns:
+        hh_stats = train_df.groupby("LCLid")["total_kwh"].agg([
+            ("hh_avg_consumption", "mean"),
+            ("hh_std_consumption", "std"),
+            ("hh_max_consumption", "max"),
+            ("hh_min_consumption", "min")
+        ]).reset_index()
+        train_df = train_df.merge(hh_stats, on="LCLid", how="left")
+        test_df = test_df.merge(hh_stats, on="LCLid", how="left")
+        train_df["daily_vs_hh_avg"] = train_df["total_kwh"] / train_df["hh_avg_consumption"]
+        test_df["daily_vs_hh_avg"] = test_df["total_kwh"] / test_df["hh_avg_consumption"]
+        train_df["daily_vs_hh_max"] = train_df["total_kwh"] / train_df["hh_max_consumption"]
+        test_df["daily_vs_hh_max"] = test_df["total_kwh"] / test_df["hh_max_consumption"]
+    return train_df, test_df
+
 def prepare_forecasting_data(df: pd.DataFrame, 
                            target_col: str = "total_kwh",
-                           test_start: str = "2014-01-01") -> tuple:
+                           test_days: int = 90,
+                           val_days: int = 30) -> tuple:
     """
-    Prepare data for forecasting models
+    Prepare data for forecasting models with chronological split (leakage-safe)
+    Includes train/validation/test splits for proper model evaluation
     
     Args:
         df: Dataframe with features
         target_col: Target variable for forecasting
-        test_start: Start date for test set
+        test_days: Number of days to use for test set (default: 90 days)
+        val_days: Number of days to use for validation set (default: 30 days)
         
     Returns:
-        Tuple of (train_df, test_df, feature_cols, target_col, feature_groups)
+        Tuple of (train_df, val_df, test_df, feature_cols, target_col, feature_groups)
     """
     print("📊 Preparing data for forecasting...")
     
@@ -181,20 +207,37 @@ def prepare_forecasting_data(df: pd.DataFrame,
     feature_cols = get_forecasting_features(df)
     feature_groups = get_forecasting_feature_groups(df)
     
-    # Split by date for time series
+    # Ensure day column is datetime
     df["day"] = pd.to_datetime(df["day"])
-    test_start = pd.to_datetime(test_start)
     
-    train_df = df[df["day"] < test_start].copy()
+    # Sort by date to ensure chronological order
+    df = df.sort_values("day")
+    
+    # Calculate split dates
+    test_start = df["day"].max() - pd.Timedelta(days=test_days)
+    val_start = test_start - pd.Timedelta(days=val_days)
+    
+    # Split by date for time series
+    train_df = df[df["day"] < val_start].copy()
+    val_df = df[(df["day"] >= val_start) & (df["day"] < test_start)].copy()
     test_df = df[df["day"] >= test_start].copy()
     
+    # --- Add group/household features in a leakage-safe way ---
+    # Compute features on train only, then apply to val and test
+    train_df, _ = add_group_and_household_features(train_df, pd.concat([val_df, test_df]))
+    val_df, test_df = add_group_and_household_features(val_df, test_df)
+    
     print(f"   ✅ Train: {len(train_df):,} rows ({train_df['LCLid'].nunique()} households)")
+    print(f"   ✅ Validation: {len(val_df):,} rows ({val_df['LCLid'].nunique()} households)")
     print(f"   ✅ Test: {len(test_df):,} rows ({test_df['LCLid'].nunique()} households)")
+    print(f"   ✅ Train period: {train_df['day'].min()} to {train_df['day'].max()}")
+    print(f"   ✅ Validation period: {val_df['day'].min()} to {val_df['day'].max()}")
+    print(f"   ✅ Test period: {test_df['day'].min()} to {test_df['day'].max()}")
     print(f"   ✅ Features: {len(feature_cols)} columns")
     print(f"   ✅ Feature groups: {len(feature_groups)} groups")
     print(f"   ✅ Target: {target_col}")
     
-    return train_df, test_df, feature_cols, target_col, feature_groups
+    return train_df, val_df, test_df, feature_cols, target_col, feature_groups
 
 if __name__ == "__main__":
     print("🔧 Feature Pipeline - Comprehensive Features for Forecasting")
