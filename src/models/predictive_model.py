@@ -22,6 +22,7 @@ from sklearn.preprocessing import LabelEncoder
 import warnings
 import optuna
 from optuna.integration import XGBoostPruningCallback
+import time
 
 warnings.filterwarnings('ignore')
 
@@ -146,7 +147,8 @@ def tune_hyperparameters(train_df: pd.DataFrame,
                         val_df: pd.DataFrame,
                         feature_cols: list,
                         target_col: str = "total_kwh",
-                        n_trials: int = 50) -> dict:
+                        n_trials: int = 50,
+                        use_gpu: bool = True) -> dict:
     """
     Tune XGBoost hyperparameters using Optuna with early stopping and validation set
     
@@ -156,6 +158,7 @@ def tune_hyperparameters(train_df: pd.DataFrame,
         feature_cols: List of feature columns
         target_col: Target variable name
         n_trials: Number of optimization trials
+        use_gpu: Whether to use GPU acceleration
         
     Returns:
         Dictionary of best hyperparameters
@@ -163,82 +166,126 @@ def tune_hyperparameters(train_df: pd.DataFrame,
     print("🎯 Tuning XGBoost Hyperparameters")
     print("=" * 40)
     
-    # Prepare data
-    X_train = train_df[feature_cols]
-    y_train = train_df[target_col]
-    X_val = val_df[feature_cols]
-    y_val = val_df[target_col]
-    
-    # Create DMatrix for XGBoost
-    dtrain = xgb.DMatrix(X_train, label=y_train)
-    dval = xgb.DMatrix(X_val, label=y_val)
-    
-    def objective(trial):
-        # Define hyperparameter search space
-        params = {
-            'max_depth': trial.suggest_int('max_depth', 3, 8),
-            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3, log=True),
-            'n_estimators': trial.suggest_int('n_estimators', 100, 1000),
-            'min_child_weight': trial.suggest_int('min_child_weight', 1, 7),
-            'subsample': trial.suggest_float('subsample', 0.6, 1.0),
-            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 1.0),
-            'gamma': trial.suggest_float('gamma', 0, 5),
-            'reg_alpha': trial.suggest_float('reg_alpha', 1e-8, 1.0, log=True),
-            'reg_lambda': trial.suggest_float('reg_lambda', 1e-8, 1.0, log=True),
-            'tree_method': 'hist',  # Use histogram-based algorithm for faster training
-            'random_state': 42
+    try:
+        # Prepare data
+        X_train = train_df[feature_cols].copy()
+        y_train = train_df[target_col]
+        X_val = val_df[feature_cols].copy()
+        y_val = val_df[target_col]
+        
+        # Handle categorical variables
+        categorical_cols = X_train.select_dtypes(include=['object']).columns
+        if len(categorical_cols) > 0:
+            print(f"🔄 Encoding {len(categorical_cols)} categorical variables...")
+            from sklearn.preprocessing import LabelEncoder
+            
+            # Create and fit label encoders
+            label_encoders = {}
+            for col in categorical_cols:
+                le = LabelEncoder()
+                # Fit on train data only
+                le.fit(X_train[col].astype(str))
+                # Transform both train and validation
+                X_train[col] = le.transform(X_train[col].astype(str))
+                X_val[col] = le.transform(X_val[col].astype(str))
+                label_encoders[col] = le
+        
+        # Create DMatrix for XGBoost with memory optimization
+        dtrain = xgb.DMatrix(X_train, label=y_train, enable_categorical=True)
+        dval = xgb.DMatrix(X_val, label=y_val, enable_categorical=True)
+        
+        def objective(trial):
+            # Define hyperparameter search space
+            params = {
+                'max_depth': trial.suggest_int('max_depth', 3, 8),
+                'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3, log=True),
+                'n_estimators': trial.suggest_int('n_estimators', 100, 1000),
+                'min_child_weight': trial.suggest_int('min_child_weight', 1, 7),
+                'subsample': trial.suggest_float('subsample', 0.6, 1.0),
+                'colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 1.0),
+                'gamma': trial.suggest_float('gamma', 0, 5),
+                'reg_alpha': trial.suggest_float('reg_alpha', 1e-8, 1.0, log=True),
+                'reg_lambda': trial.suggest_float('reg_lambda', 1e-8, 1.0, log=True),
+                'tree_method': 'gpu_hist' if use_gpu else 'hist',  # Use GPU if available
+                'random_state': 42,
+                'nthread': 4,  # Limit number of threads
+                'max_bin': 256  # Reduce memory usage
+            }
+            
+            # Train with early stopping
+            model = xgb.train(
+                params,
+                dtrain,
+                num_boost_round=params['n_estimators'],
+                evals=[(dtrain, 'train'), (dval, 'val')],
+                early_stopping_rounds=50,
+                verbose_eval=False
+            )
+            
+            # Get best validation score
+            return model.best_score
+        
+        # Create study with memory optimization
+        study = optuna.create_study(
+            direction='minimize',  # Minimize RMSE
+            pruner=optuna.pruners.MedianPruner(
+                n_startup_trials=5,
+                n_warmup_steps=10,
+                interval_steps=1
+            ),
+            sampler=optuna.samplers.TPESampler(seed=42)
+        )
+        
+        # Run optimization with memory management
+        study.optimize(
+            objective,
+            n_trials=n_trials,
+            show_progress_bar=True,
+            gc_after_trial=True  # Garbage collection after each trial
+        )
+        
+        # Get best parameters
+        best_params = study.best_params
+        best_params.update({
+            'tree_method': 'gpu_hist' if use_gpu else 'hist',
+            'random_state': 42,
+            'nthread': 4,
+            'max_bin': 256
+        })
+        
+        print("\n📊 Best Hyperparameters:")
+        for param, value in best_params.items():
+            print(f"   {param}: {value}")
+        print(f"\n🎯 Best Validation RMSE: {study.best_value:.4f}")
+        
+        return best_params
+        
+    except Exception as e:
+        print(f"❌ Error during hyperparameter tuning: {str(e)}")
+        # Return default parameters if tuning fails
+        return {
+            'max_depth': 6,
+            'learning_rate': 0.1,
+            'n_estimators': 1000,
+            'min_child_weight': 3,
+            'subsample': 0.8,
+            'colsample_bytree': 0.8,
+            'gamma': 0,
+            'reg_alpha': 0,
+            'reg_lambda': 1,
+            'tree_method': 'gpu_hist' if use_gpu else 'hist',
+            'random_state': 42,
+            'nthread': 4,
+            'max_bin': 256
         }
-        
-        # Train with early stopping
-        model = xgb.train(
-            params,
-            dtrain,
-            num_boost_round=params['n_estimators'],
-            evals=[(dtrain, 'train'), (dval, 'val')],
-            early_stopping_rounds=50,
-            verbose_eval=False
-        )
-        
-        # Get best validation score
-        return model.best_score
-    
-    # Create study
-    study = optuna.create_study(
-        direction='minimize',  # Minimize RMSE
-        pruner=optuna.pruners.MedianPruner(
-            n_startup_trials=5,
-            n_warmup_steps=10,
-            interval_steps=1
-        )
-    )
-    
-    # Run optimization
-    study.optimize(
-        objective,
-        n_trials=n_trials,
-        show_progress_bar=True
-    )
-    
-    # Get best parameters
-    best_params = study.best_params
-    best_params.update({
-        'tree_method': 'hist',
-        'random_state': 42
-    })
-    
-    print("\n📊 Best Hyperparameters:")
-    for param, value in best_params.items():
-        print(f"   {param}: {value}")
-    print(f"\n🎯 Best Validation RMSE: {study.best_value:.4f}")
-    
-    return best_params
 
 def train_xgboost_model(train_df: pd.DataFrame,
                        val_df: pd.DataFrame,
                        test_df: pd.DataFrame,
                        feature_cols: list,
                        target_col: str = "total_kwh",
-                       params: dict = None) -> tuple:
+                       params: dict = None,
+                       use_gpu: bool = True) -> tuple:
     """
     Train XGBoost model with best hyperparameters and evaluate on validation/test sets
     
@@ -249,6 +296,7 @@ def train_xgboost_model(train_df: pd.DataFrame,
         feature_cols: List of feature columns
         target_col: Target variable name
         params: Optional hyperparameters (if None, will use default tuned parameters)
+        use_gpu: Whether to use GPU acceleration
         
     Returns:
         Tuple of (trained model, validation metrics, test metrics)
@@ -256,69 +304,94 @@ def train_xgboost_model(train_df: pd.DataFrame,
     print("🚀 Training XGBoost Model")
     print("=" * 35)
     
-    # Prepare data
-    X_train = train_df[feature_cols]
-    y_train = train_df[target_col]
-    X_val = val_df[feature_cols]
-    y_val = val_df[target_col]
-    X_test = test_df[feature_cols]
-    y_test = test_df[target_col]
-    
-    # Create DMatrix for XGBoost
-    dtrain = xgb.DMatrix(X_train, label=y_train)
-    dval = xgb.DMatrix(X_val, label=y_val)
-    dtest = xgb.DMatrix(X_test, label=y_test)
-    
-    # Use default parameters if none provided
-    if params is None:
-        params = {
-            'max_depth': 6,
-            'learning_rate': 0.1,
-            'n_estimators': 1000,
-            'min_child_weight': 3,
-            'subsample': 0.8,
-            'colsample_bytree': 0.8,
-            'gamma': 0,
-            'reg_alpha': 0,
-            'reg_lambda': 1,
-            'tree_method': 'hist',
-            'random_state': 42
-        }
-    
-    # Train model with early stopping
-    model = xgb.train(
-        params,
-        dtrain,
-        num_boost_round=params['n_estimators'],
-        evals=[(dtrain, 'train'), (dval, 'val')],
-        early_stopping_rounds=50,
-        verbose_eval=100
-    )
-    
-    # Make predictions
-    val_preds = model.predict(dval)
-    test_preds = model.predict(dtest)
-    
-    # Calculate metrics
-    def calculate_metrics(y_true, y_pred):
-        return {
-            'rmse': np.sqrt(mean_squared_error(y_true, y_pred)),
-            'mae': mean_absolute_error(y_true, y_pred),
-            'r2': r2_score(y_true, y_pred)
-        }
-    
-    val_metrics = calculate_metrics(y_val, val_preds)
-    test_metrics = calculate_metrics(y_test, test_preds)
-    
-    print("\n📊 Validation Metrics:")
-    for metric, value in val_metrics.items():
-        print(f"   {metric.upper()}: {value:.4f}")
-    
-    print("\n📊 Test Metrics:")
-    for metric, value in test_metrics.items():
-        print(f"   {metric.upper()}: {value:.4f}")
-    
-    return model, val_metrics, test_metrics
+    try:
+        # Prepare data
+        X_train = train_df[feature_cols].copy()
+        y_train = train_df[target_col]
+        X_val = val_df[feature_cols].copy()
+        y_val = val_df[target_col]
+        X_test = test_df[feature_cols].copy()
+        y_test = test_df[target_col]
+        
+        # Handle categorical variables
+        categorical_cols = X_train.select_dtypes(include=['object']).columns
+        if len(categorical_cols) > 0:
+            print(f"🔄 Encoding {len(categorical_cols)} categorical variables...")
+            from sklearn.preprocessing import LabelEncoder
+            
+            # Create and fit label encoders
+            label_encoders = {}
+            for col in categorical_cols:
+                le = LabelEncoder()
+                # Fit on train data only
+                le.fit(X_train[col].astype(str))
+                # Transform train, validation, and test
+                X_train[col] = le.transform(X_train[col].astype(str))
+                X_val[col] = le.transform(X_val[col].astype(str))
+                X_test[col] = le.transform(X_test[col].astype(str))
+                label_encoders[col] = le
+        
+        # Create DMatrix for XGBoost with memory optimization
+        dtrain = xgb.DMatrix(X_train, label=y_train, enable_categorical=True)
+        dval = xgb.DMatrix(X_val, label=y_val, enable_categorical=True)
+        dtest = xgb.DMatrix(X_test, label=y_test, enable_categorical=True)
+        
+        # Use default parameters if none provided
+        if params is None:
+            params = {
+                'max_depth': 6,
+                'learning_rate': 0.1,
+                'n_estimators': 1000,
+                'min_child_weight': 3,
+                'subsample': 0.8,
+                'colsample_bytree': 0.8,
+                'gamma': 0,
+                'reg_alpha': 0,
+                'reg_lambda': 1,
+                'tree_method': 'gpu_hist' if use_gpu else 'hist',
+                'random_state': 42,
+                'nthread': 4,
+                'max_bin': 256
+            }
+        
+        # Train model with early stopping and memory optimization
+        model = xgb.train(
+            params,
+            dtrain,
+            num_boost_round=params['n_estimators'],
+            evals=[(dtrain, 'train'), (dval, 'val')],
+            early_stopping_rounds=50,
+            verbose_eval=100
+        )
+        
+        # Make predictions
+        val_preds = model.predict(dval)
+        test_preds = model.predict(dtest)
+        
+        # Calculate metrics
+        def calculate_metrics(y_true, y_pred):
+            return {
+                'rmse': np.sqrt(mean_squared_error(y_true, y_pred)),
+                'mae': mean_absolute_error(y_true, y_pred),
+                'r2': r2_score(y_true, y_pred)
+            }
+        
+        val_metrics = calculate_metrics(y_val, val_preds)
+        test_metrics = calculate_metrics(y_test, test_preds)
+        
+        print("\n📊 Validation Metrics:")
+        for metric, value in val_metrics.items():
+            print(f"   {metric.upper()}: {value:.4f}")
+        
+        print("\n📊 Test Metrics:")
+        for metric, value in test_metrics.items():
+            print(f"   {metric.upper()}: {value:.4f}")
+        
+        return model, val_metrics, test_metrics
+        
+    except Exception as e:
+        print(f"❌ Error during model training: {str(e)}")
+        raise  # Re-raise the exception to handle it in the calling code
 
 def calculate_shap_values(model_dict: dict, 
                          data_dict: dict,
@@ -371,68 +444,6 @@ def calculate_shap_values(model_dict: dict,
         'feature_names': list(X_shap.columns)
     }
 
-def run_stage0_predictive_modeling(df: pd.DataFrame,
-                                  target_col: str = "total_kwh",
-                                  test_size: float = 0.2,
-                                  shap_sample_size: int = 1000,
-                                  xgb_params: dict = None) -> dict:
-    """
-    Run complete Stage 0 predictive modeling pipeline
-    
-    Args:
-        df: Input dataframe with comprehensive features
-        target_col: Target variable name
-        test_size: Test set proportion
-        shap_sample_size: Sample size for SHAP analysis
-        xgb_params: XGBoost parameters (optional)
-        
-    Returns:
-        Complete Stage 0 modeling results
-    """
-    print("🎯 RUNNING STAGE 0: PREDICTIVE MODELING FOR CONSUMPTION DRIVERS")
-    print("=" * 65)
-    
-    # Step 1: Prepare clean modeling data
-    print("\n" + "="*20 + " STEP 1: DATA PREPARATION " + "="*20)
-    data_dict = prepare_modeling_data(df, target_col, test_size)
-    
-    # Step 2: Train XGBoost model
-    print("\n" + "="*20 + " STEP 2: MODEL TRAINING " + "="*20)
-    model_dict = train_xgboost_model(data_dict['X_train'], data_dict['X_test'], data_dict['X_test'], data_dict['feature_cols'], target_col)
-    
-    # Step 3: Calculate SHAP values
-    print("\n" + "="*20 + " STEP 3: SHAP ANALYSIS " + "="*20)
-    shap_dict = calculate_shap_values(model_dict, data_dict, shap_sample_size)
-    
-    print("\n🎉 STAGE 0 PREDICTIVE MODELING COMPLETED!")
-    print("="*50)
-    print("✅ Data prepared and cleaned")
-    print("✅ XGBoost model trained and evaluated")
-    print("✅ SHAP values calculated for driver analysis")
-    print("✅ Ready for consumption driver analysis")
-    
-    # Summary statistics
-    r2_score_val = model_dict[1]['r2']
-    mae_score = model_dict[1]['mae']
-    
-    print(f"\n📊 QUICK SUMMARY:")
-    print(f"   Model Performance (R²): {r2_score_val:.4f}")
-    print(f"   Prediction Error (MAE): {mae_score:.4f} kWh")
-    print(f"   Features analyzed: {len(data_dict['feature_cols'])}")
-    print(f"   Feature groups: {len(data_dict['feature_groups'])}")
-    
-    return {
-        'data': data_dict,
-        'model': model_dict,
-        'shap': shap_dict,
-        'summary': {
-            'r2_score': r2_score_val,
-            'mae_score': mae_score,
-            'feature_count': len(data_dict['feature_cols']),
-            'group_count': len(data_dict['feature_groups'])
-        }
-    }
-
 if __name__ == "__main__":
     print("🎯 Predictive Model - Stage 0: XGBoost Training & SHAP Generation")
-    print("Usage: from src.models.predictive_model import run_stage0_predictive_modeling") 
+    print("Usage: from src.models.predictive_model import tune_hyperparameters, train_xgboost_model") 
