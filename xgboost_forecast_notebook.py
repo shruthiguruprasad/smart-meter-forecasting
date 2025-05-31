@@ -27,7 +27,7 @@ warnings.filterwarnings('ignore')
 from data.data_loader import load_all_raw_data
 from data.data_cleaner import clean_and_merge_all_data     # or clean_all_data, whichever you use
 from features.feature_pipeline import create_comprehensive_features
-from features.splitters import prepare_forecasting_data, prepare_weekahead_data_with_raw
+from features.splitters import prepare_forecasting_data, prepare_weekahead_data
 from models.xgboost_forecasting import (
     train_and_evaluate_dayahead,
     train_and_evaluate_weekahead,
@@ -121,7 +121,7 @@ print(f"   🎯 Target: {target_col}")
 
 print("\n📅 Preparing week-ahead forecasting data...")
 # Again, no `household_meta` argument
-train_df7, val_df7, test_df7, feature_cols7, target7, feature_groups7 = prepare_weekahead_data_with_raw(
+train_df7, val_df7, test_df7, feature_cols7, target7, feature_groups7 = prepare_weekahead_data(
     raw_data,
     df_features,
     test_days=CONFIG['test_days'],

@@ -24,8 +24,7 @@ from .consumption_features import (
 )
 
 from .temporal_features import (
-    create_all_temporal_features,
-    create_timeseries_features_safe
+    create_all_temporal_features
 )
 
 from .weather_features import (
@@ -40,9 +39,9 @@ from .weather_features import (
 # -----------------------------------------------------------------------------
 def create_comprehensive_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Create a “full” set of leakage‐safe features for electricity forecasting,
+    Create a "full" set of leakage‐safe features for electricity forecasting,
     but do NOT drop ANY columns. Downstream logic (splitters) will have to
-    drop raw targets if they shouldn’t be exposed.
+    drop raw targets if they shouldn't be exposed.
 
     Components (in order):
       1) Temporal features
@@ -79,7 +78,7 @@ def create_comprehensive_features(df: pd.DataFrame) -> pd.DataFrame:
     #  2) CONSUMPTION‐PATTERN FEATURES (INTERMEDIATE)
     # ---------------------------------------------------------------------
     print("⚡ Creating consumption‐pattern features...")
-    # These might compute things like “peak_kwh,” “daily_variability,” etc.
+    # These might compute things like "peak_kwh," "daily_variability," etc.
     # (They do not drop raw columns yet—just augment the DataFrame.)
     df = create_consumption_features(df)
     df = create_consumption_patterns(df)
