@@ -102,6 +102,26 @@ def prepare_weather_data(df: pd.DataFrame) -> pd.DataFrame:
     # Normalize day to date-only
     df_weather["day"] = pd.to_datetime(df_weather["day"]).dt.date
     
+    # 🔍 DIAGNOSTIC: Check for duplicate dates (DST transitions)
+    day_counts = df_weather.groupby("day").size().sort_values(ascending=False)
+    duplicate_days = day_counts[day_counts > 1]
+    
+    if len(duplicate_days) > 0:
+        print(f"   ⚠️ Found {len(duplicate_days)} dates with multiple records (likely DST transitions):")
+        duplicate_dates = [pd.Timestamp(day) for day in duplicate_days.index]
+        print(f"   📝 Duplicate dates: {duplicate_dates}")
+        print(f"   📊 Counts per duplicate date:\n{duplicate_days}")
+        
+        # Remove duplicates, keeping the first occurrence
+        initial_count = len(df_weather)
+        df_weather = df_weather.drop_duplicates(subset=["day"], keep='first')
+        final_count = len(df_weather)
+        
+        print(f"   ✅ Removed {initial_count - final_count} DST duplicate rows")
+        print(f"   📊 Weather data: {initial_count} → {final_count} rows")
+    else:
+        print("   ✅ No duplicate dates found - weather data looks clean")
+    
     # Clean weather data - interpolate missing values
     df_weather['day'] = pd.to_datetime(df_weather['day'], errors='coerce')
     df_weather = df_weather.sort_values('day').set_index('day')
