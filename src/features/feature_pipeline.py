@@ -1,8 +1,9 @@
 """
-FEATURE PIPELINE - Comprehensive Features for Forecasting
-===========================================================
+FEATURE PIPELINE - Comprehensive Leakage-Safe Features for Forecasting
+======================================================================
 
 Comprehensive feature pipeline for electricity consumption forecasting.
+Creates leakage-safe features by avoiding direct consumption exposure.
 
 Author: Shruthi Simha Chippagiri
 Date: 2025
@@ -12,325 +13,296 @@ import pandas as pd
 import numpy as np
 from .consumption_features import (
     create_consumption_features, 
-    create_consumption_patterns,
-    create_timeseries_features,
-    create_household_characteristics
+    create_consumption_patterns
 )
 from .temporal_features import create_all_temporal_features
 from .weather_features import create_all_weather_features
 import warnings
-warnings.filterwarnings('ignore')
+
+warnings.filterwarnings("ignore")
+
 
 def create_comprehensive_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Create comprehensive features for electricity consumption forecasting
-    (except group/household features, which are handled after splitting to avoid leakage)
+    Create leakage‐safe, comprehensive features for electricity forecasting.
+    Components (in order):
+      1) Temporal features
+      2) Consumption‐pattern features (intermediate, then dropped)
+      3) Weather features
+      4) Time‐series features (lags, rolls)
+      5) Leakage‐safe interactions (using lagged consumption)
+      6) Drop any direct‐today consumption columns
     
     Args:
-        df: Input dataframe with cleaned data
-        
+        df: Input DataFrame containing at least:
+            - 'LCLid' (household ID)
+            - 'day'   (date or datetime)
+            - 'total_kwh' (raw daily usage) or half‐hourly columns for consumption
+            - Weather columns: 'temperatureMax', 'temperatureMin', 'humidity', 'windSpeed', 'cloudCover'
+            - Any temporal flags (if pre‐computed) or they will be created
     Returns:
-        Dataframe with comprehensive features for modeling
+        A new DataFrame with all leakage‐safe features added and raw consumption columns removed.
     """
-    print("🚀 CREATING COMPREHENSIVE FEATURES FOR FORECASTING")
-    print("=" * 55)
+    print("🚀 CREATING COMPREHENSIVE LEAKAGE-SAFE FEATURES")
+    print("=" * 50)
     
-    # 1. Temporal features (foundation for time series)
+    # 1. Temporal features (dayofweek, month, is_holiday, is_weekend, etc.)
+    print("📅 Creating temporal features...")
     df = create_all_temporal_features(df)
     
-    # 2. Core consumption features
+    # 2. Consumption-pattern features (create features like peak_kwh, daily_variability, etc.)
+    #    These are intermediate—some will be dropped below to avoid leakage.
+    print("⚡ Creating consumption pattern features (intermediate)...")
     df = create_consumption_features(df)
-    
-    # 3. Consumption patterns (for household archetypes)
     df = create_consumption_patterns(df)
     
-    # 4. Weather features (important external factors)
+    # 3. Weather features (temp_avg, heating_degree_days, cooling_degree_days, etc.)
+    print("🌤️ Creating weather features...")
     df = create_all_weather_features(df)
     
-    # 5. ACORN socio-economic features (REMOVED: now handled after split)
-    # 6. Household characteristics (REMOVED: now handled after split)
+    # 4. Time-series features (lags and rolling windows)
+    #    Must shift by 1 (or more) to avoid using total_kwh[t] directly.
+    print("📈 Creating time-series features (lags and rolling windows)...")
+    df = create_timeseries_features_safe(df, target_col="total_kwh", lags=[1, 7, 14], windows=[7, 14])
+
+    # 5. Leakage‐safe interaction features (all referencing lag1_total)
+    print("🔗 Creating leakage-safe interaction features...")
+    eps = 1e-6
+    if {"is_weekend", "heating_degree_days", "lag1_total"}.issubset(df.columns):
+        df["lag1_weekend_heating"] = (
+            df["is_weekend"] 
+            * df["heating_degree_days"] 
+            * (df["lag1_total"] / (df["lag1_total"] + eps))
+        ).fillna(0)
+
+    if {"is_holiday", "lag1_total"}.issubset(df.columns):
+        df["lag1_holiday_consumption"] = (df["is_holiday"] * df["lag1_total"]).fillna(0)
+
+    if {"is_summer", "cooling_degree_days", "lag1_total"}.issubset(df.columns):
+        df["lag1_summer_cooling"] = (
+            df["is_summer"]
+            * df["cooling_degree_days"]
+            * (df["lag1_total"] / (df["lag1_total"] + eps))
+        ).fillna(0)
+
+    # 6. Drop any columns that directly expose today's consumption or raw half-hourly readings
+    print("🧹 Removing leakage-prone features...")
+    to_drop = []
+    # Direct consumption columns
+    forbidden_prefixes = [
+        "total_kwh", "mean_kwh", "std_kwh", "peak_kwh", "min_kwh",
+        "morning_kwh", "afternoon_kwh", "evening_kwh", "night_kwh",
+        "peak_period_kwh", "off_peak_kwh", "base_load", "load_factor",
+        "daily_variability", "coefficient_of_variation",
+        "usage_concentration", "peak_sharpness",
+        "peak_to_mean_ratio", "peak_to_total_ratio", "day_night_ratio",
+        "holiday_consumption_boost", "base_load_ratio", "consumption_sharpness"
+    ]
+    for col in df.columns:
+        for prefix in forbidden_prefixes:
+            if col == prefix or col.startswith(prefix + "_"):
+                to_drop.append(col)
+        # Raw half-hourly columns, e.g. 'hh_0' ... 'hh_47'
+        if col.startswith("hh_") and col.replace("hh_", "").isdigit():
+            to_drop.append(col)
+
+    dropped_cols = list(set(to_drop))
+    df = df.drop(columns=dropped_cols, errors="ignore")
     
-    # 7. Time series features (critical for forecasting)
-    df = create_timeseries_features(df, target_col="total_kwh", lags=[1, 7, 14], windows=[7, 14])
-    
-    # 8. Interaction features
-    print("🔗 Creating interaction features...")
-    
-    # Weather-temporal interactions
-    if all(col in df.columns for col in ["is_weekend", "heating_degree_days"]):
-        df["weekend_heating"] = df["is_weekend"] * df["heating_degree_days"]
-        df["weekday_heating"] = df["is_weekday"] * df["heating_degree_days"]
-    
-    if all(col in df.columns for col in ["is_summer", "cooling_degree_days"]):
-        df["summer_cooling"] = df["is_summer"] * df["cooling_degree_days"]
-    
-    # Holiday-consumption interactions
-    if all(col in df.columns for col in ["is_holiday", "total_kwh"]):
-        df["holiday_consumption_boost"] = df["is_holiday"] * df["total_kwh"]
-    
-    # 🔧 CRITICAL FIX: Add missing critical features expected by notebooks
-    # Holiday-heating interaction (critical feature)
-    if all(col in df.columns for col in ["is_holiday", "heating_degree_days"]):
-        df["holiday_heating_interaction"] = df["is_holiday"] * df["heating_degree_days"]
-    
-    print("✅ ALL COMPREHENSIVE FEATURES CREATED")
+    print(f"   🚫 Dropped {len(dropped_cols)} leakage-prone columns")
+    print("✅ COMPREHENSIVE LEAKAGE-SAFE FEATURES CREATED")
     print(f"📊 Final shape: {df.shape}")
-    
-    # Show detailed feature summary
-    feature_counts = {
-        'Consumption Basic': len([c for c in df.columns if any(x in c for x in ['total', 'mean', 'peak', 'min', 'std'])]),
-        'Time-of-Day': len([c for c in df.columns if any(x in c for x in ['morning', 'afternoon', 'evening', 'night'])]),
-        'Consumption Patterns': len([c for c in df.columns if any(x in c for x in ['ratio', 'variability', 'concentration', 'sharpness', 'load_factor'])]),
-        'Weather': len([c for c in df.columns if any(x in c for x in ['temp', 'heating', 'cooling', 'humidity', 'wind', 'cloud'])]),
-        'Temporal': len([c for c in df.columns if any(x in c for x in ['dayofweek', 'weekend', 'month', 'season', 'holiday', 'quarter'])]),
-        'Time Series': len([c for c in df.columns if any(x in c for x in ['lag', 'roll', 'delta', 'pct_change', 'weekly'])]),
-        'Interactions': len([c for c in df.columns if any(x in c for x in ['weekend_heating', 'summer_cooling', 'holiday_'])]),
-        'Peak Timing': len([c for c in df.columns if any(x in c for x in ['peak_hour', 'peak_period', 'off_peak'])])
-    }
-    # Note: ACORN and Household features are now handled after split
-    
-    print("\n📋 COMPREHENSIVE FEATURE SUMMARY:")
-    total_features = sum(feature_counts.values())
-    for category, count in feature_counts.items():
-        print(f"   {category}: {count} features")
-    print(f"   TOTAL: {total_features} features")
     
     return df
 
-def get_forecasting_feature_groups(df: pd.DataFrame) -> dict:
+
+def create_timeseries_features_safe(
+    df: pd.DataFrame,
+    target_col: str,
+    lags: list,
+    windows: list
+) -> pd.DataFrame:
     """
-    Organize features into logical groups for model interpretation
+    Create leakage‐safe time-series features: lags and rolling means.
+    Each feature for day t references only total_kwh[t - k].
     
     Args:
-        df: Dataframe with features
+        df: DataFrame containing 'LCLid', 'day', and target_col (total_kwh).
+        target_col: Name of the raw consumption column, e.g. 'total_kwh'.
+        lags: List of integer lag days (e.g. [1, 7, 14]).
+        windows: List of integer rolling window sizes (e.g. [7, 14]).
+    Returns:
+        df with new columns:
+            - 'lag{lag}_total' for each lag
+            - 'roll{window}_total_mean' for each window (computed on shifted series)
+            - Optionally pct_change and delta fields
+    """
+    df = df.sort_values(["LCLid", "day"])
+    
+    # Create lag features
+    for lag in lags:
+        col_name = f"lag{lag}_total"
+        df[col_name] = df.groupby("LCLid")[target_col].shift(lag)
+
+    # Create rolling-window features on shifted target (shift by 1 to exclude current day)
+    for window in windows:
+        col_name = f"roll{window}_total_mean"
+        shifted = df.groupby("LCLid")[target_col].shift(1)
+        df[col_name] = (
+            shifted
+            .groupby(df["LCLid"])
+            .rolling(window, min_periods=1)
+            .mean()
+            .reset_index(level=0, drop=True)
+        )
+
+    # Optional: percent change and delta from previous lag (e.g. lag1 vs lag2)
+    if 1 in lags:
+        df["lag2_total"] = df.groupby("LCLid")[target_col].shift(2)
+        df["delta1_total"] = (df["lag1_total"] - df["lag2_total"]).fillna(0)
+        df["pct_change1_total"] = np.where(
+            df["lag2_total"].abs() > 0,
+            (df["lag1_total"] - df["lag2_total"]) / (df["lag2_total"] + 1e-6),
+            0
+        )
+        df = df.drop(columns=["lag2_total"], errors="ignore")
+
+    return df
+
+
+def get_forecasting_features(df: pd.DataFrame, target_col: str = None) -> list:
+    """
+    Return a leakage‐safe list of predictor column names.
+    Drops any column equal to target_col, and excludes:
+        - Columns starting with 'LCLid', 'day', or 'hh_'
+    
+    Args:
+        df: Input DataFrame including features and possibly target_col.
+        target_col: Name of the target column to drop (e.g. 'total_kwh' or 'label_7').
         
     Returns:
-        Dictionary of feature groups
+        feature_cols: List of column names that can be used as model inputs.
     """
-    # Patterns to exclude for proper forecasting (same as get_forecasting_features)
-    exclude_patterns = [
-        "LCLid", "day", "holiday_type",  # Basic exclusions
-        # ⚠️ CRITICAL: Exclude ALL consumption-derived features to prevent data leakage
-        "total_kwh", "mean_kwh", "std_kwh", "peak_kwh", "min_kwh",  # Direct consumption stats
-        "morning_kwh", "afternoon_kwh", "evening_kwh", "night_kwh",  # Time-of-day consumption
-        "peak_period_kwh", "off_peak_kwh",  # Peak period consumption
-        "base_load", "load_factor",  # Load metrics derived from consumption
-        "daily_variability", "coefficient_of_variation",  # Consumption variability
-        "usage_concentration", "peak_sharpness", "base_load_ratio",  # Consumption patterns
-        "peak_to_mean_ratio", "peak_to_total_ratio", "day_night_ratio",  # Consumption ratios
-        "holiday_consumption_boost",  # Holiday-consumption interactions
-        "consumption_sharpness"  # Additional consumption patterns
+    temp_df = df.copy()
+    if target_col is not None and target_col in temp_df.columns:
+        temp_df = temp_df.drop(columns=[target_col])
+
+    exclude_prefixes = ["LCLid", "day", "hh_"]
+    feature_cols = [
+        col for col in temp_df.columns
+        if not any(col.startswith(pref) for pref in exclude_prefixes)
     ]
+
+    print(f"📊 Selected {len(feature_cols)} forecasting features")
+    return feature_cols
+
+
+def get_forecasting_feature_groups(df: pd.DataFrame, target_col: str = None) -> dict:
+    """
+    Organize predictor columns into logical categories for interpretation.
+    Drops target_col, then groups by substring patterns.
     
-    # Get leakage-safe feature columns
-    all_cols = []
-    for col in df.columns:
-        # Skip excluded patterns
-        exclude_this = False
-        for pattern in exclude_patterns:
-            if pattern in col:
-                exclude_this = True
-                break
-                
-        if exclude_this:
-            continue
-            
-        # Skip raw half-hourly data
-        if col.startswith('hh_') and col.replace('hh_', '').isdigit():
-            continue
-            
-        all_cols.append(col)
+    Categories and matching substrings:
+      - 'temporal': ["dayofweek", "month", "is_holiday", "is_weekend", "season", "quarter"]
+      - 'weather': ["temp", "heating", "cooling", "humidity", "wind", "cloud"]
+      - 'time_series': ["lag", "roll", "delta", "pct_change", "weekly"]
+      - 'consumption_patterns': ["ratio", "variability", "concentration", "sharpness"]
+      - 'household_group': ["acorn", "hh_avg", "hh_std", "hh_max", "hh_min", "relative_variability"]
+      - 'interactions': ["lag1_weekend_heating", "lag1_holiday_consumption", "lag1_summer_cooling"]
     
+    Args:
+        df: DataFrame containing predictor columns and possibly target_col.
+        target_col: Name of the target column to drop first.
+    
+    Returns:
+        feature_groups: Dict mapping category names to lists of column names.
+    """
+    temp_df = df.copy()
+    if target_col is not None and target_col in temp_df.columns:
+        temp_df = temp_df.drop(columns=[target_col])
+
+    exclude_prefixes = ["LCLid", "day", "hh_"]
+    all_predictors = [
+        col for col in temp_df.columns
+        if not any(col.startswith(pref) for pref in exclude_prefixes)
+    ]
+
     feature_groups = {
-        'weather': [c for c in all_cols if any(x in c for x in ['temp', 'heating', 'cooling', 'humidity', 'wind', 'cloud'])],
-        'temporal': [c for c in all_cols if any(x in c for x in ['dayofweek', 'weekend', 'month', 'season', 'holiday', 'quarter'])],
-        'time_series': [c for c in all_cols if any(x in c for x in ['lag', 'roll', 'delta', 'pct_change', 'weekly'])],
-        'household': [c for c in all_cols if any(x in c for x in ['acorn', 'hh_avg', 'hh_std', 'hh_max', 'hh_min', 'daily_vs'])],
-        'peak_timing': [c for c in all_cols if any(x in c for x in ['peak_hour', 'is_morning_peak', 'is_evening_peak', 'is_off_peak'])],
-        'interactions': [c for c in all_cols if any(x in c for x in ['weekend_heating', 'summer_cooling', 'holiday_heating', 'weekday_heating'])]
+        "temporal": [
+            col for col in all_predictors
+            if any(substr in col for substr in ["dayofweek", "month", "is_holiday", "is_weekend", "season", "quarter"])
+        ],
+        "weather": [
+            col for col in all_predictors
+            if any(substr in col for substr in ["temp", "heating", "cooling", "humidity", "wind", "cloud"])
+        ],
+        "time_series": [
+            col for col in all_predictors
+            if any(substr in col for substr in ["lag", "roll", "delta", "pct_change", "weekly"])
+        ],
+        "consumption_patterns": [
+            col for col in all_predictors
+            if any(substr in col for substr in ["ratio", "variability", "concentration", "sharpness"])
+        ],
+        "household_group": [
+            col for col in all_predictors
+            if any(substr in col for substr in ["acorn", "hh_avg", "hh_std", "hh_max", "hh_min", "relative_variability"])
+        ],
+        "interactions": [
+            col for col in all_predictors
+            if any(substr in col for substr in ["lag1_weekend_heating", "lag1_holiday_consumption", "lag1_summer_cooling"])
+        ]
     }
-    
+
     return feature_groups
 
-def get_forecasting_features(df: pd.DataFrame) -> list:
-    """
-    Get list of features suitable for forecasting (exclude IDs, dates, targets)
-    
-    Args:
-        df: Dataframe with features
-        
-    Returns:
-        List of feature column names
-    """
-    # Explicit list of columns to exclude for proper forecasting (prevent data leakage)
-    exclude_exact = {
-        # Basic exclusions
-        "LCLid", "day", "holiday_type",
-        # ⚠️ CRITICAL: Exclude ALL consumption-derived features to prevent data leakage
-        "total_kwh", "mean_kwh", "std_kwh", "peak_kwh", "min_kwh",  # Direct consumption stats
-        "morning_kwh", "afternoon_kwh", "evening_kwh", "night_kwh",  # Time-of-day consumption
-        "peak_period_kwh", "off_peak_kwh",  # Peak period consumption
-        "base_load", "load_factor", "base_load_ratio",  # Load metrics derived from consumption
-        "daily_variability", "coefficient_of_variation",  # Consumption variability
-        "usage_concentration", "peak_sharpness",  # Consumption patterns
-        "peak_to_mean_ratio", "peak_to_total_ratio", "day_night_ratio",  # Consumption ratios
-        "holiday_consumption_boost",  # Holiday-consumption interactions
-        "consumption_sharpness"  # Additional consumption patterns
-    }
-    
-    # Additional patterns to check for partial matches
-    exclude_patterns = [
-        "_kwh",  # Any column ending with _kwh (consumption related)
-        "consumption",  # Any column with consumption in the name
-    ]
-    
-    feature_cols = []
-    excluded_count = 0
-    
-    print(f"🔍 Scanning {len(df.columns)} columns for features...")
-    
-    for col in df.columns:
-        # Skip if exact match in exclude list
-        if col in exclude_exact:
-            excluded_count += 1
-            print(f"   🚫 Excluded (exact): {col}")
-            continue
-            
-        # Skip if partial pattern match
-        exclude_this = False
-        for pattern in exclude_patterns:
-            if pattern in col and col != "target_col":  # Make sure we don't accidentally exclude legitimate features
-                # But allow lag/roll features that contain kwh patterns
-                if not any(time_pattern in col for time_pattern in ['lag', 'roll', 'delta', 'pct_change']):
-                    exclude_this = True
-                    excluded_count += 1
-                    print(f"   🚫 Excluded (pattern '{pattern}'): {col}")
-                    break
-                    
-        if exclude_this:
-            continue
-            
-        # Skip if it looks like raw half-hourly data (hh_0, hh_1, etc.)
-        if col.startswith('hh_') and col.replace('hh_', '').isdigit():
-            excluded_count += 1
-            continue
-            
-        feature_cols.append(col)
-        print(f"   ✅ Included: {col}")
-    
-    print(f"\n📊 Selected {len(feature_cols)} forecasting features (leakage-safe)")
-    print(f"🚫 Excluded {excluded_count} target-related/raw features to prevent data leakage")
-    
-    # SAFETY CHECK: Ensure target is not in features
-    if "total_kwh" in feature_cols:
-        print(f"❌ CRITICAL ERROR: total_kwh still in features! Removing manually.")
-        feature_cols.remove("total_kwh")
-    
-    return feature_cols
 
 def add_group_and_household_features(train_df, test_df):
     """
     Add group-level (ACORN) and household-level features in a leakage-safe way.
     Compute stats on train only, merge into both train and test.
     """
+    print("🏠 Adding group and household features...")
+    
     # ACORN group features
     if 'Acorn_grouped' in train_df.columns:
-        acorn_means = train_df.groupby("Acorn_grouped")["total_kwh"].mean().rename("acorn_avg_consumption")
+        print("   📍 Adding ACORN group features...")
+        # Use lag1_total instead of total_kwh to avoid leakage
+        target_for_stats = "lag1_total" if "lag1_total" in train_df.columns else "total_kwh"
+        
+        acorn_means = train_df.groupby("Acorn_grouped")[target_for_stats].mean().rename("acorn_avg_consumption")
         train_df = train_df.merge(acorn_means, on="Acorn_grouped", how="left")
         test_df = test_df.merge(acorn_means, on="Acorn_grouped", how="left")
-        train_df["acorn_consumption_ratio"] = train_df["total_kwh"] / (train_df["acorn_avg_consumption"] + 1e-6)
-        test_df["acorn_consumption_ratio"] = test_df["total_kwh"] / (test_df["acorn_avg_consumption"] + 1e-6)
-        # Peak behavior by ACORN group
-        acorn_peak = train_df.groupby("Acorn_grouped")["peak_kwh"].mean().rename("acorn_peak_kwh")
-        acorn_total = train_df.groupby("Acorn_grouped")["total_kwh"].mean().rename("acorn_total_kwh")
-        acorn_peak_ratio = (acorn_peak / (acorn_total + 1e-6)).rename("acorn_peak_ratio")
-        train_df = train_df.merge(acorn_peak_ratio, on="Acorn_grouped", how="left")
-        test_df = test_df.merge(acorn_peak_ratio, on="Acorn_grouped", how="left")
-        # Variability by ACORN group
-        acorn_var = train_df.groupby("Acorn_grouped")["daily_variability"].mean().rename("acorn_variability")
-        train_df = train_df.merge(acorn_var, on="Acorn_grouped", how="left")
-        test_df = test_df.merge(acorn_var, on="Acorn_grouped", how="left")
-        train_df["relative_variability"] = train_df["daily_variability"] / (train_df["acorn_variability"] + 1e-6)
-        test_df["relative_variability"] = test_df["daily_variability"] / (test_df["acorn_variability"] + 1e-6)
+        
+        if target_for_stats in train_df.columns:
+            train_df["acorn_consumption_ratio"] = train_df[target_for_stats] / (train_df["acorn_avg_consumption"] + 1e-6)
+            test_df["acorn_consumption_ratio"] = test_df[target_for_stats] / (test_df["acorn_avg_consumption"] + 1e-6)
+    
     # Household-level features
     if 'LCLid' in train_df.columns:
-        hh_stats = train_df.groupby("LCLid")["total_kwh"].agg([
+        print("   🏡 Adding household features...")
+        # Use lag1_total instead of total_kwh to avoid leakage
+        target_for_stats = "lag1_total" if "lag1_total" in train_df.columns else "total_kwh"
+        
+        hh_stats = train_df.groupby("LCLid")[target_for_stats].agg([
             ("hh_avg_consumption", "mean"),
             ("hh_std_consumption", "std"),
             ("hh_max_consumption", "max"),
             ("hh_min_consumption", "min")
         ]).reset_index()
+        
         train_df = train_df.merge(hh_stats, on="LCLid", how="left")
         test_df = test_df.merge(hh_stats, on="LCLid", how="left")
-        train_df["daily_vs_hh_avg"] = train_df["total_kwh"] / train_df["hh_avg_consumption"]
-        test_df["daily_vs_hh_avg"] = test_df["total_kwh"] / test_df["hh_avg_consumption"]
-        train_df["daily_vs_hh_max"] = train_df["total_kwh"] / train_df["hh_max_consumption"]
-        test_df["daily_vs_hh_max"] = test_df["total_kwh"] / test_df["hh_max_consumption"]
+        
+        if target_for_stats in train_df.columns:
+            train_df["daily_vs_hh_avg"] = train_df[target_for_stats] / (train_df["hh_avg_consumption"] + 1e-6)
+            test_df["daily_vs_hh_avg"] = test_df[target_for_stats] / (test_df["hh_avg_consumption"] + 1e-6)
+            train_df["daily_vs_hh_max"] = train_df[target_for_stats] / (train_df["hh_max_consumption"] + 1e-6)
+            test_df["daily_vs_hh_max"] = test_df[target_for_stats] / (test_df["hh_max_consumption"] + 1e-6)
+    
     return train_df, test_df
 
-def prepare_forecasting_data(df: pd.DataFrame, 
-                           target_col: str = "total_kwh",
-                           test_days: int = 90,
-                           val_days: int = 30) -> tuple:
-    """
-    Prepare data for forecasting models with chronological split (leakage-safe)
-    Includes train/validation/test splits for proper model evaluation
-    
-    Args:
-        df: Dataframe with features
-        target_col: Target variable for forecasting
-        test_days: Number of days to use for test set (default: 90 days)
-        val_days: Number of days to use for validation set (default: 30 days)
-        
-    Returns:
-        Tuple of (train_df, val_df, test_df, feature_cols, target_col, feature_groups)
-    """
-    print("📊 Preparing data for forecasting...")
-    
-    # Get initial feature columns and groups (will be updated after household features)
-    initial_feature_cols = get_forecasting_features(df)
-    feature_groups = get_forecasting_feature_groups(df)
-    
-    # Ensure day column is datetime
-    df["day"] = pd.to_datetime(df["day"])
-    
-    # Sort by date to ensure chronological order
-    df = df.sort_values("day")
-    
-    # Calculate split dates
-    test_start = df["day"].max() - pd.Timedelta(days=test_days)
-    val_start = test_start - pd.Timedelta(days=val_days)
-    
-    # Split by date for time series
-    train_df = df[df["day"] < val_start].copy()
-    val_df = df[(df["day"] >= val_start) & (df["day"] < test_start)].copy()
-    test_df = df[df["day"] >= test_start].copy()
-    
-    # --- Add group/household features in a leakage-safe way ---
-    # Compute features on train only, then apply to val and test
-    train_df, _ = add_group_and_household_features(train_df, pd.concat([val_df, test_df]))
-    val_df, test_df = add_group_and_household_features(val_df, test_df)
-    
-    # 🔧 CRITICAL FIX: Update feature columns AFTER household features are added
-    print("🔄 Updating feature list to include household features...")
-    feature_cols = get_forecasting_features(train_df)  # Use train_df which now has all features
-    feature_groups = get_forecasting_feature_groups(train_df)  # Update groups too
-    
-    print(f"   ✅ Initial features: {len(initial_feature_cols)}")
-    print(f"   ✅ Final features: {len(feature_cols)} (+{len(feature_cols) - len(initial_feature_cols)} household features)")
-    
-    print(f"   ✅ Train: {len(train_df):,} rows ({train_df['LCLid'].nunique()} households)")
-    print(f"   ✅ Validation: {len(val_df):,} rows ({val_df['LCLid'].nunique()} households)")
-    print(f"   ✅ Test: {len(test_df):,} rows ({test_df['LCLid'].nunique()} households)")
-    print(f"   ✅ Train period: {train_df['day'].min()} to {train_df['day'].max()}")
-    print(f"   ✅ Validation period: {val_df['day'].min()} to {val_df['day'].max()}")
-    print(f"   ✅ Test period: {test_df['day'].min()} to {test_df['day'].max()}")
-    print(f"   ✅ Features: {len(feature_cols)} columns")
-    print(f"   ✅ Feature groups: {len(feature_groups)} groups")
-    print(f"   ✅ Target: {target_col}")
-    
-    return train_df, val_df, test_df, feature_cols, target_col, feature_groups
 
 if __name__ == "__main__":
-    print("🔧 Feature Pipeline - Comprehensive Features for Forecasting")
+    print("🔧 Feature Pipeline - Comprehensive Leakage-Safe Features for Forecasting")
     print("Usage: from src.features.feature_pipeline import create_comprehensive_features") 

@@ -1,21 +1,16 @@
 """
-🚀 XGBOOST FORECASTING - Model Building and Prediction
-====================================================
+MODEL BUILDING - Enhanced XGBoost with Optuna Optimization
+==========================================================
 
-XGBoost model creation, training, and prediction functions.
-Pure model building without evaluation - evaluation functions moved to evaluation folder.
+Advanced model building pipeline for electricity consumption forecasting.
+Features Optuna hyperparameter optimization and clean separation of concerns.
 
-🔧 ENHANCED FEATURES:
-- ✅ Datetime column validation (prevents accidental leakage)
-- ✅ NaN monitoring with percentage reporting
-- ✅ GPU/CPU resource management optimization
-- ✅ Log transform option for relative error modeling
-- ✅ Comprehensive error handling and validation
-
-⚠️ CRITICAL REQUIREMENT:
-All lag/rolling features MUST be properly time-shifted upstream to prevent data leakage:
-- For day-ahead: lag1_total uses t-1 to predict t
-- For week-ahead: features use ≤t-1 to predict t+7
+Key Features:
+- Optuna-based hyperparameter tuning
+- Support for both day-ahead (h=1) and week-ahead (h=7) forecasting
+- Log transform option for relative error modeling
+- Comprehensive data preparation and validation
+- GPU/CPU optimization
 
 Author: Shruthi Simha Chippagiri
 Date: 2025
@@ -24,436 +19,549 @@ Date: 2025
 import pandas as pd
 import numpy as np
 import xgboost as xgb
+import optuna
 from sklearn.preprocessing import LabelEncoder
 import warnings
-warnings.filterwarnings('ignore')
 
-def validate_forecasting_features(feature_cols: list, target_col: str = "total_kwh") -> None:
+warnings.filterwarnings("ignore")
+
+
+def prepare_xgboost_data(
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    feature_cols: list,
+    target_col: str = "total_kwh",
+    categorical_cols: list = None,
+    log_transform: bool = False
+) -> dict:
     """
-    Validate feature list for common forecasting issues
+    Prepare XGBoost-ready datasets: feature matrices and target arrays.
+    - Optionally applies log1p transform on the target.
+    - Label-encodes any categorical columns (if specified); fits encoders on combined train+val+test.
+    - Drops rows where X or y is NaN (after encoding and optional transform).
     
     Args:
+        train_df, val_df, test_df: DataFrames with features and target
         feature_cols: List of feature column names
-        target_col: Target variable name
-        
-    Raises:
-        ValueError: If potential data leakage or issues detected
-    """
-    # Check for direct target leakage
-    if target_col in feature_cols:
-        raise ValueError(f"❌ Target variable '{target_col}' found in features!")
-    
-    # Check for obvious leakage patterns
-    leakage_patterns = [
-        'total_kwh', 'mean_kwh', 'peak_kwh', 'min_kwh',  # Direct consumption
-        'morning_kwh', 'afternoon_kwh', 'evening_kwh', 'night_kwh',  # Time-of-day consumption  
-        'consumption_sharpness', 'usage_concentration'  # Consumption-derived features
-    ]
-    
-    found_leakage = [f for f in feature_cols if any(pattern in f for pattern in leakage_patterns) 
-                     and not any(lag in f for lag in ['lag', 'roll', 'delta'])]
-    
-    if found_leakage:
-        print(f"⚠️ WARNING: Potential data leakage features found: {found_leakage[:5]}...")
-        print("   Make sure these are properly time-shifted or remove them.")
-    
-    print(f"✅ Feature validation completed: {len(feature_cols)} features checked")
-
-def prepare_xgboost_data(train_df: pd.DataFrame,
-                        val_df: pd.DataFrame,
-                        test_df: pd.DataFrame,
-                        feature_cols: list,
-                        target_col: str = "total_kwh",
-                        household_id: str = None,
-                        log_transform: bool = False) -> dict:
-    """
-    Prepare data for XGBoost forecasting
-    
-    Args:
-        train_df: Training dataframe
-        val_df: Validation dataframe
-        test_df: Test dataframe
-        feature_cols: List of feature columns
-        target_col: Target variable for forecasting
-        household_id: Optional specific household ID to filter for
-        log_transform: Whether to apply log transform to target variable
+        target_col: Name of target column
+        categorical_cols: List of categorical columns to encode (auto-detected if None)
+        log_transform: Whether to apply log1p transform to target
         
     Returns:
-        Dictionary with prepared data
+        Dictionary with X_train, y_train, etc. and metadata
     """
-    print("📊 Preparing XGBoost forecasting data...")
+    print(f"📊 Preparing XGBoost data for target: {target_col}")
     
-    # Filter for specific household if provided
-    if household_id:
-        train_df = train_df[train_df['LCLid'] == household_id].copy()
-        val_df = val_df[val_df['LCLid'] == household_id].copy()
-        test_df = test_df[test_df['LCLid'] == household_id].copy()
-    
-    # Prepare feature matrices
+    # 1) Subset feature matrices
     X_train = train_df[feature_cols].copy()
-    X_val = val_df[feature_cols].copy()
-    X_test = test_df[feature_cols].copy()
-    
-    # 🔍 SAFETY CHECK: Verify no datetime columns slip into features
-    datetime_cols = X_train.select_dtypes(include=['datetime64']).columns
-    if len(datetime_cols) > 0:
-        raise ValueError(f"❌ Datetime columns found in features: {list(datetime_cols)}. Remove these before training.")
-    
-    # Prepare targets
+    X_val   = val_df[feature_cols].copy()
+    X_test  = test_df[feature_cols].copy()
+
+    # 2) Prepare target arrays
     y_train = train_df[target_col].values
-    y_val = val_df[target_col].values
-    y_test = test_df[target_col].values
-    
-    # 📊 OPTIONAL: Apply log transform for relative errors
+    y_val   = val_df[target_col].values
+    y_test  = test_df[target_col].values
+
+    # 3) Log-transform target if requested
     if log_transform:
-        print("📈 Applying log transform to target variable...")
-        y_train = np.log1p(y_train)  # log(1 + x) handles zeros safely
-        y_val = np.log1p(y_val)
-        y_test = np.log1p(y_test)
-    
-    # Handle categorical variables
-    categorical_cols = X_train.select_dtypes(include=['object']).columns
+        print("   📈 Applying log1p transform to target variable...")
+        eps = 1e-6
+        y_train = np.log1p(np.clip(y_train, a_min=0, a_max=None) + eps)
+        y_val   = np.log1p(np.clip(y_val,   a_min=0, a_max=None) + eps)
+        y_test  = np.log1p(np.clip(y_test,  a_min=0, a_max=None) + eps)
+
+    # 4) Identify categorical columns
+    if categorical_cols is None:
+        categorical_cols = X_train.select_dtypes(include=["object", "category"]).columns.tolist()
+
     label_encoders = {}
-    
-    if len(categorical_cols) > 0:
-        print(f"🔄 Encoding {len(categorical_cols)} categorical variables...")
-        
+    if categorical_cols:
+        print(f"   🔄 Encoding {len(categorical_cols)} categorical columns...")
         for col in categorical_cols:
             le = LabelEncoder()
-            # Fit on train + val + test to handle unseen categories
-            all_values = pd.concat([X_train[col], X_val[col], X_test[col]]).astype(str)
-            le.fit(all_values)
-            
+            combined = pd.concat([X_train[col], X_val[col], X_test[col]]).astype(str)
+            le.fit(combined)
             X_train[col] = le.transform(X_train[col].astype(str))
-            X_val[col] = le.transform(X_val[col].astype(str))
-            X_test[col] = le.transform(X_test[col].astype(str))
+            X_val[col]   = le.transform(X_val[col].astype(str))
+            X_test[col]  = le.transform(X_test[col].astype(str))
             label_encoders[col] = le
+
+    # 5) Drop rows with NaN in X or y
+    def drop_na(X: pd.DataFrame, y: np.ndarray):
+        mask_X = ~X.isna().any(axis=1)
+        mask_y = ~np.isnan(y)
+        mask = mask_X & mask_y
+        return X[mask].reset_index(drop=True), y[mask]
+
+    orig_train_len, orig_val_len, orig_test_len = len(X_train), len(X_val), len(X_test)
     
-    # Store original lengths for NaN monitoring
-    orig_train_len = len(X_train)
-    orig_val_len = len(X_val)
-    orig_test_len = len(X_test)
-    
-    # Remove any NaN values
-    train_mask = ~(X_train.isna().any(axis=1) | pd.isna(y_train))
-    val_mask = ~(X_val.isna().any(axis=1) | pd.isna(y_val))
-    test_mask = ~(X_test.isna().any(axis=1) | pd.isna(y_test))
-    
-    X_train, y_train = X_train[train_mask], y_train[train_mask]
-    X_val, y_val = X_val[val_mask], y_val[val_mask]
-    X_test, y_test = X_test[test_mask], y_test[test_mask]
-    
-    # 📊 NaN MONITORING: Report rows dropped
+    X_train, y_train = drop_na(X_train, y_train)
+    X_val,   y_val   = drop_na(X_val,   y_val)
+    X_test,  y_test  = drop_na(X_test,  y_test)
+
+    # Report NaN drops
     train_dropped = orig_train_len - len(X_train)
     val_dropped = orig_val_len - len(X_val)
     test_dropped = orig_test_len - len(X_test)
     
-    print(f"📊 Rows dropped due to NaNs:")
-    print(f"   Train: {train_dropped} ({(train_dropped/orig_train_len)*100:.1f}%)")
-    print(f"   Val: {val_dropped} ({(val_dropped/orig_val_len)*100:.1f}%)")
-    print(f"   Test: {test_dropped} ({(test_dropped/orig_test_len)*100:.1f}%)")
-    
-    print(f"✅ Data prepared: Train={len(X_train)}, Val={len(X_val)}, Test={len(X_test)}")
-    
+    if train_dropped + val_dropped + test_dropped > 0:
+        print(f"   🧹 Dropped rows due to NaNs:")
+        print(f"      Train: {train_dropped} ({(train_dropped/orig_train_len)*100:.1f}%)")
+        print(f"      Val: {val_dropped} ({(val_dropped/orig_val_len)*100:.1f}%)")
+        print(f"      Test: {test_dropped} ({(test_dropped/orig_test_len)*100:.1f}%)")
+
+    print(f"   ✅ Data prepared: Train={len(X_train)}, Val={len(X_val)}, Test={len(X_test)}")
+
     return {
-        'X_train': X_train, 'y_train': y_train,
-        'X_val': X_val, 'y_val': y_val,
-        'X_test': X_test, 'y_test': y_test,
-        'feature_cols': feature_cols,
-        'label_encoders': label_encoders,
-        'train_dates': train_df['day'].values[train_mask],
-        'val_dates': val_df['day'].values[val_mask],
-        'test_dates': test_df['day'].values[test_mask],
-        'log_transform': log_transform
+        "X_train": X_train,
+        "y_train": y_train,
+        "X_val":   X_val,
+        "y_val":   y_val,
+        "X_test":  X_test,
+        "y_test":  y_test,
+        "label_encoders": label_encoders,
+        "log_transform": log_transform
     }
 
-def create_xgboost_model(params: dict = None, use_gpu: bool = False) -> xgb.XGBRegressor:
+
+def create_xgboost_model(
+    params: dict = None,
+    use_gpu: bool = False
+) -> xgb.XGBRegressor:
     """
-    Create XGBoost model with optimized parameters
+    Instantiate an XGBoost regressor with default or custom parameters.
     
     Args:
-        params: Custom parameters dictionary
+        params: Dictionary of custom parameters
         use_gpu: Whether to use GPU acceleration
         
     Returns:
-        Configured XGBoost model
+        Configured XGBoost regressor
     """
     default_params = {
-        'n_estimators': 1000,
-        'max_depth': 6,
-        'learning_rate': 0.1,
-        'subsample': 0.8,
-        'colsample_bytree': 0.8,
-        'reg_alpha': 0.1,
-        'reg_lambda': 1.0,
-        'random_state': 42,
-        'tree_method': 'gpu_hist' if use_gpu else 'hist'
+        "n_estimators": 1000,
+        "max_depth": 6,
+        "learning_rate": 0.1,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "reg_alpha": 0.1,
+        "reg_lambda": 1.0,
+        "random_state": 42,
+        "n_jobs": -1,
+        "tree_method": "gpu_hist" if use_gpu else "hist"
     }
     
-    # 🔧 GPU RESOURCE MANAGEMENT: Avoid CPU+GPU conflicts
     if use_gpu:
-        default_params['n_jobs'] = 1  # Use single job with GPU to avoid conflicts
-        print("🚀 Using GPU acceleration with single job")
-    else:
-        default_params['n_jobs'] = -1  # Use all CPU cores
-        print("💻 Using CPU with all available cores")
-    
+        default_params["n_jobs"] = 1  # Avoid CPU+GPU conflicts
+        
     if params:
         default_params.update(params)
-    
+
     model = xgb.XGBRegressor(**default_params)
-    
-    print(f"✅ XGBoost model created with {default_params['n_estimators']} estimators")
+    print(f"   ✅ XGBoost model created with {default_params['n_estimators']} estimators "
+          f"and tree_method='{default_params['tree_method']}'")
     return model
 
-def train_xgboost_forecasting(data_dict: dict,
-                             params: dict = None,
-                             use_gpu: bool = False,
-                             early_stopping_rounds: int = 50,
-                             verbose_eval: bool = False) -> dict:
+
+def train_xgboost_model(
+    data_dict: dict,
+    params: dict = None,
+    use_gpu: bool = False,
+    early_stopping_rounds: int = 50,
+    verbose: bool = False
+) -> dict:
     """
-    Train XGBoost model for forecasting
+    Train an XGBoost regressor using provided datasets and return metadata.
     
     Args:
         data_dict: Dictionary with prepared data
-        params: Custom model parameters
-        use_gpu: Whether to use GPU acceleration
+        params: Model parameters
+        use_gpu: Whether to use GPU
         early_stopping_rounds: Early stopping patience
-        verbose_eval: Whether to print evaluation metrics during training
+        verbose: Whether to print training logs
         
     Returns:
         Dictionary with trained model and metadata
     """
-    print("🚀 Training XGBoost forecasting model...")
-    
-    # Create model
-    model = create_xgboost_model(params, use_gpu)
-    
-    # 📊 EARLY STOPPING STRATEGY: Monitor validation performance
-    eval_set = [
-        (data_dict['X_train'], data_dict['y_train']),
-        (data_dict['X_val'], data_dict['y_val'])
-    ]
-    eval_names = ['train', 'validation']
-    
-    # Train with early stopping
+    X_train = data_dict["X_train"]
+    y_train = data_dict["y_train"]
+    X_val   = data_dict["X_val"]
+    y_val   = data_dict["y_val"]
+
+    model = create_xgboost_model(params=params, use_gpu=use_gpu)
+
+    print("   🚀 Training XGBoost model...")
     model.fit(
-        data_dict['X_train'], 
-        data_dict['y_train'],
-        eval_set=eval_set,
-        eval_metric='rmse',
+        X_train,
+        y_train,
+        eval_set=[(X_train, y_train), (X_val, y_val)],
+        eval_metric="rmse",
         early_stopping_rounds=early_stopping_rounds,
-        verbose=verbose_eval
+        verbose=verbose
     )
-    
-    print(f"✅ Model trained with {model.best_iteration + 1} iterations (stopped at {model.n_estimators})")
-    
-    # 📈 TRAINING SUMMARY: Report final performance
-    train_rmse = model.evals_result_['validation_0']['rmse'][-1]
-    val_rmse = model.evals_result_['validation_1']['rmse'][-1]
-    print(f"📊 Final RMSE - Train: {train_rmse:.4f}, Validation: {val_rmse:.4f}")
-    
-    # Check for potential overfitting
-    if val_rmse > train_rmse * 1.5:
-        print("⚠️ WARNING: Significant overfitting detected (val_RMSE >> train_RMSE)")
-        print("   Consider: reducing max_depth, increasing regularization, or more data")
-    
-    # Feature importance
-    feature_importance = pd.DataFrame({
-        'feature': data_dict['feature_cols'],
-        'importance': model.feature_importances_
-    }).sort_values('importance', ascending=False)
-    
+
+    best_iter = model.best_iteration
+    fi_df = pd.DataFrame({
+        "feature": data_dict["X_train"].columns,
+        "importance": model.feature_importances_
+    }).sort_values("importance", ascending=False).reset_index(drop=True)
+
+    print(f"   ✅ Model trained with best_iteration = {best_iter + 1}")
+
     return {
-        'model': model,
-        'feature_importance': feature_importance,
-        'best_iteration': model.best_iteration,
-        'train_rmse': train_rmse,
-        'val_rmse': val_rmse,
-        'training_completed': True
+        "model": model,
+        "best_iteration": best_iter,
+        "feature_importance": fi_df
     }
 
-def predict_xgboost(model: xgb.XGBRegressor, X: pd.DataFrame, log_transform: bool = False) -> np.array:
+
+def predict_xgboost(
+    model: xgb.XGBRegressor,
+    X: pd.DataFrame,
+    log_transform: bool = False
+) -> np.ndarray:
     """
-    Generate predictions with XGBoost model
+    Generate predictions using a trained XGBoost model.
+    If log_transform=True, apply inverse transform expm1 to the predictions.
     
     Args:
         model: Trained XGBoost model
         X: Feature matrix
-        log_transform: Whether to inverse transform log predictions
+        log_transform: Whether to inverse transform predictions
         
     Returns:
-        Predictions array
+        Prediction array
     """
-    predictions = model.predict(X)
-    
-    # 📈 INVERSE LOG TRANSFORM if applied during training
+    preds = model.predict(X)
     if log_transform:
-        predictions = np.expm1(predictions)  # exp(x) - 1, inverse of log1p
-        
-    return predictions
+        preds = np.expm1(np.clip(preds, a_min=0, a_max=None))
+    return preds
 
-def xgboost_day_ahead_forecast(train_df: pd.DataFrame,
-                               val_df: pd.DataFrame,
-                               test_df: pd.DataFrame,
-                               feature_cols: list,
-                               target_col: str = "total_kwh",
-                               household_id: str = None,
-                               params: dict = None,
-                               use_gpu: bool = False,
-                               log_transform: bool = False) -> dict:
+
+def objective_optuna(trial: optuna.Trial, data_dict: dict) -> float:
     """
-    Complete day-ahead forecasting pipeline with XGBoost
+    Optuna objective to minimize validation RMSE.
     
     Args:
-        train_df: Training dataframe
-        val_df: Validation dataframe
-        test_df: Test dataframe
-        feature_cols: List of feature columns
-        target_col: Target variable for forecasting
-        household_id: Optional specific household ID
-        params: Custom model parameters
-        use_gpu: Whether to use GPU acceleration
-        log_transform: Whether to apply log transform to target
+        trial: Optuna trial object
+        data_dict: Dictionary with training data
         
     Returns:
-        Dictionary with model, predictions, actuals, and metadata
+        Validation RMSE to minimize
     """
-    print("🚀 XGBOOST DAY-AHEAD FORECASTING")
-    print("=" * 40)
+    param = {
+        "max_depth": trial.suggest_int("max_depth", 4, 12),
+        "learning_rate": trial.suggest_float("learning_rate", 1e-3, 0.3, log=True),
+        "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+        "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 1.0),
+        "reg_lambda": trial.suggest_float("reg_lambda", 0.0, 1.0),
+        "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+        "gamma": trial.suggest_float("gamma", 0.0, 5.0),
+        "n_estimators": 1000,
+        "objective": "reg:squarederror",
+        "random_state": 42,
+        "n_jobs": -1,
+        "tree_method": "gpu_hist" if data_dict.get("use_gpu", False) else "hist"
+    }
+
+    model = xgb.XGBRegressor(**param)
+    X_train = data_dict["X_train"]
+    y_train = data_dict["y_train"]
+    X_val   = data_dict["X_val"]
+    y_val   = data_dict["y_val"]
+
+    model.fit(
+        X_train,
+        y_train,
+        eval_set=[(X_val, y_val)],
+        eval_metric="rmse",
+        early_stopping_rounds=50,
+        verbose=False
+    )
+
+    y_val_pred = model.predict(X_val)
+    rmse_val = np.sqrt(((y_val - y_val_pred) ** 2).mean())
+    return rmse_val
+
+
+def optimize_xgboost_hyperparams(
+    data_dict: dict,
+    n_trials: int = 50,
+    use_gpu: bool = False,
+    seed: int = 42
+) -> dict:
+    """
+    Run an Optuna study to find best hyperparameters minimizing validation RMSE.
     
-    # 🔍 VALIDATE FEATURES: Check for potential data leakage
-    validate_forecasting_features(feature_cols, target_col)
+    Args:
+        data_dict: Dictionary with training data
+        n_trials: Number of optimization trials
+        use_gpu: Whether to use GPU
+        seed: Random seed
+        
+    Returns:
+        Dictionary with best parameters
+    """
+    print(f"🔍 Starting Optuna optimization with {n_trials} trials...")
     
-    # Prepare data
-    data_dict = prepare_xgboost_data(
-        train_df, val_df, test_df, feature_cols, target_col, household_id, log_transform
+    data_dict["use_gpu"] = use_gpu
+
+    def objective(trial):
+        return objective_optuna(trial, data_dict)
+
+    study = optuna.create_study(
+        direction="minimize",
+        sampler=optuna.samplers.TPESampler(seed=seed)
     )
     
-    # Train model
-    model_dict = train_xgboost_forecasting(data_dict, params, use_gpu)
+    # Suppress Optuna logs during optimization
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
+
+    print(f"   🎯 Best trial RMSE = {study.best_value:.4f}")
+    print(f"   📋 Best params: {study.best_params}")
+
+    best_params = study.best_params.copy()
+    best_params.update({
+        "n_estimators": 1000,
+        "random_state": 42,
+        "tree_method": "gpu_hist" if use_gpu else "hist",
+        "n_jobs": 1 if use_gpu else -1
+    })
+    return best_params
+
+
+def train_and_evaluate_dayahead(
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    feature_cols: list,
+    target_col: str = "total_kwh",
+    categorical_cols: list = None,
+    use_gpu: bool = False,
+    n_trials: int = 50,
+    log_transform: bool = False
+) -> dict:
+    """
+    Day‐ahead (h=1) pipeline with Optuna tuning.
+    Returns dict with best_params, model, feature_importance, metrics, predictions, actuals.
     
-    # Generate predictions
-    train_pred = predict_xgboost(model_dict['model'], data_dict['X_train'], log_transform)
-    val_pred = predict_xgboost(model_dict['model'], data_dict['X_val'], log_transform)
-    test_pred = predict_xgboost(model_dict['model'], data_dict['X_test'], log_transform)
+    Args:
+        train_df, val_df, test_df: DataFrames with features and target
+        feature_cols: List of feature column names
+        target_col: Target column name
+        categorical_cols: List of categorical columns
+        use_gpu: Whether to use GPU
+        n_trials: Number of Optuna trials
+        log_transform: Whether to use log transform
+        
+    Returns:
+        Dictionary with complete results
+    """
+    print("🚀 DAY-AHEAD FORECASTING PIPELINE")
+    print("=" * 40)
     
-    # If log transform was used, also inverse transform actuals for comparison
-    y_train_orig = data_dict['y_train']
-    y_val_orig = data_dict['y_val'] 
-    y_test_orig = data_dict['y_test']
+    # Try importing evaluation functions
+    try:
+        from ..evaluation.forecast_evaluation import compute_regression_metrics, print_regression_results
+    except ImportError:
+        print("⚠️ Warning: Could not import evaluation functions. Will return raw predictions.")
+        compute_regression_metrics = None
+        print_regression_results = None
+
+    data_dict = prepare_xgboost_data(
+        train_df, val_df, test_df,
+        feature_cols, target_col,
+        categorical_cols=categorical_cols,
+        log_transform=log_transform
+    )
+
+    print("\n🔍 Starting Optuna hyperparameter optimization...")
+    best_params = optimize_xgboost_hyperparams(
+        data_dict, n_trials=n_trials, use_gpu=use_gpu, seed=42
+    )
+
+    print("\n🚀 Training final XGBoost model with best hyperparameters...")
+    model_dict = train_xgboost_model(
+        data_dict,
+        params=best_params,
+        use_gpu=use_gpu,
+        early_stopping_rounds=50,
+        verbose=False
+    )
+    model = model_dict["model"]
+
+    # Get true values (inverse transform if needed)
+    y_train_true = data_dict["y_train"]
+    y_val_true   = data_dict["y_val"]
+    y_test_true  = data_dict["y_test"]
     
     if log_transform:
-        y_train_orig = np.expm1(y_train_orig)
-        y_val_orig = np.expm1(y_val_orig)
-        y_test_orig = np.expm1(y_test_orig)
-    
-    # Prepare results
-    results = {
-        'model': model_dict['model'],
-        'predictions': {
-            'train': train_pred,
-            'val': val_pred,
-            'test': test_pred
+        y_train_true = np.expm1(np.clip(y_train_true, a_min=0, a_max=None))
+        y_val_true   = np.expm1(np.clip(y_val_true,   a_min=0, a_max=None))
+        y_test_true  = np.expm1(np.clip(y_test_true,  a_min=0, a_max=None))
+
+    # Generate predictions
+    y_train_pred = predict_xgboost(model, data_dict["X_train"], log_transform=log_transform)
+    y_val_pred   = predict_xgboost(model, data_dict["X_val"],   log_transform=log_transform)
+    y_test_pred  = predict_xgboost(model, data_dict["X_test"],  log_transform=log_transform)
+
+    # Compute metrics if evaluation functions available
+    metrics = {}
+    if compute_regression_metrics is not None:
+        metrics = {
+            "train": compute_regression_metrics(y_train_true, y_train_pred),
+            "val":   compute_regression_metrics(y_val_true,   y_val_pred),
+            "test":  compute_regression_metrics(y_test_true,  y_test_pred)
+        }
+
+        print("\n📈 DAY‐AHEAD PERFORMANCE (Final Model):")
+        print("   Train Metrics:")
+        print_regression_results(metrics["train"], prefix="Train")
+        print("   Validation Metrics:")
+        print_regression_results(metrics["val"], prefix="Val")
+        print("   Test Metrics:")
+        print_regression_results(metrics["test"], prefix="Test")
+
+    return {
+        "best_params": best_params,
+        "model": model,
+        "feature_importance": model_dict["feature_importance"],
+        "metrics": metrics,
+        "predictions": {
+            "train": y_train_pred,
+            "val":   y_val_pred,
+            "test":  y_test_pred
         },
-        'actuals': {
-            'train': y_train_orig,
-            'val': y_val_orig,
-            'test': y_test_orig
-        },
-        'dates': {
-            'train': data_dict['train_dates'],
-            'val': data_dict['val_dates'],
-            'test': data_dict['test_dates']
-        },
-        'feature_importance': model_dict['feature_importance'],
-        'feature_cols': feature_cols,
-        'target_col': target_col,
-        'y_true': y_test_orig,
-        'y_pred': test_pred,
-        'log_transform': log_transform
+        "actuals": {
+            "train": y_train_true,
+            "val":   y_val_true,
+            "test":  y_test_true
+        }
     }
-    
-    print("✅ XGBoost forecasting completed")
-    return results
 
-def xgboost_multi_household_forecast(train_df: pd.DataFrame,
-                                    val_df: pd.DataFrame,
-                                    test_df: pd.DataFrame,
-                                    feature_cols: list,
-                                    target_col: str = "total_kwh",
-                                    n_households: int = 5,
-                                    params: dict = None,
-                                    log_transform: bool = False) -> dict:
+
+def train_and_evaluate_weekahead(
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    feature_cols: list,
+    target_col: str = "label_7",
+    categorical_cols: list = None,
+    use_gpu: bool = False,
+    n_trials: int = 50,
+    log_transform: bool = False
+) -> dict:
     """
-    Run forecasting for multiple households
+    Week‐ahead (h=7) pipeline with Optuna tuning.
     
     Args:
-        train_df: Training dataframe
-        val_df: Validation dataframe
-        test_df: Test dataframe
-        feature_cols: List of feature columns
-        target_col: Target variable
-        n_households: Number of households to forecast
-        params: Model parameters
-        log_transform: Whether to apply log transform to target
+        train_df, val_df, test_df: DataFrames with features and target
+        feature_cols: List of feature column names
+        target_col: Target column name (should be 'label_7')
+        categorical_cols: List of categorical columns
+        use_gpu: Whether to use GPU
+        n_trials: Number of Optuna trials
+        log_transform: Whether to use log transform
         
     Returns:
-        Dictionary with results for all households
+        Dictionary with complete results
     """
-    print(f"🚀 Multi-Household XGBoost Forecasting ({n_households} households)")
-    print("=" * 60)
+    print("🚀 WEEK-AHEAD FORECASTING PIPELINE")
+    print("=" * 40)
     
-    # Get available households
-    households = train_df['LCLid'].unique()[:n_households]
-    
-    results = {}
-    
-    for i, household_id in enumerate(households):
-        print(f"\n📊 Forecasting household {i+1}/{n_households}: {household_id}")
-        
-        # Run forecasting for this household
-        household_results = xgboost_day_ahead_forecast(
-            train_df, val_df, test_df, feature_cols, target_col, 
-            household_id, params, use_gpu=False, log_transform=log_transform
-        )
-        
-        results[household_id] = household_results
-    
-    results['households'] = households
-    results['log_transform'] = log_transform
-    
-    return results
+    # Try importing evaluation functions
+    try:
+        from ..evaluation.forecast_evaluation import compute_regression_metrics, print_regression_results
+    except ImportError:
+        print("⚠️ Warning: Could not import evaluation functions. Will return raw predictions.")
+        compute_regression_metrics = None
+        print_regression_results = None
 
-def get_top_features(feature_importance: pd.DataFrame, top_k: int = 20) -> pd.DataFrame:
-    """
-    Get top K most important features
+    data_dict = prepare_xgboost_data(
+        train_df, val_df, test_df,
+        feature_cols, target_col,
+        categorical_cols=categorical_cols,
+        log_transform=log_transform
+    )
+
+    print("\n🔍 Starting Optuna hyperparameter optimization (Week‐Ahead)...")
+    best_params = optimize_xgboost_hyperparams(
+        data_dict, n_trials=n_trials, use_gpu=use_gpu, seed=42
+    )
+
+    print("\n🚀 Training final XGBoost model with best hyperparameters (Week‐Ahead)...")
+    model_dict = train_xgboost_model(
+        data_dict,
+        params=best_params,
+        use_gpu=use_gpu,
+        early_stopping_rounds=50,
+        verbose=False
+    )
+    model = model_dict["model"]
+
+    # Get true values (inverse transform if needed)
+    y_train_true = data_dict["y_train"]
+    y_val_true   = data_dict["y_val"]
+    y_test_true  = data_dict["y_test"]
     
-    Args:
-        feature_importance: Feature importance dataframe
-        top_k: Number of top features to return
-        
-    Returns:
-        Top features dataframe
-    """
-    top_features = feature_importance.head(top_k)
-    
-    print(f"\n📊 TOP {top_k} MOST IMPORTANT FEATURES:")
-    for i, (_, row) in enumerate(top_features.iterrows(), 1):
-        print(f"   {i:2d}. {row['feature']:<30} : {row['importance']:.4f}")
-    
-    return top_features
+    if log_transform:
+        y_train_true = np.expm1(np.clip(y_train_true, a_min=0, a_max=None))
+        y_val_true   = np.expm1(np.clip(y_val_true,   a_min=0, a_max=None))
+        y_test_true  = np.expm1(np.clip(y_test_true,  a_min=0, a_max=None))
+
+    # Generate predictions
+    y_train_pred = predict_xgboost(model, data_dict["X_train"], log_transform=log_transform)
+    y_val_pred   = predict_xgboost(model, data_dict["X_val"],   log_transform=log_transform)
+    y_test_pred  = predict_xgboost(model, data_dict["X_test"],  log_transform=log_transform)
+
+    # Compute metrics if evaluation functions available
+    metrics = {}
+    if compute_regression_metrics is not None:
+        metrics = {
+            "train": compute_regression_metrics(y_train_true, y_train_pred),
+            "val":   compute_regression_metrics(y_val_true,   y_val_pred),
+            "test":  compute_regression_metrics(y_test_true,  y_test_pred)
+        }
+
+        print("\n📈 WEEK‐AHEAD PERFORMANCE (Final Model):")
+        print("   Train Metrics:")
+        print_regression_results(metrics["train"], prefix="Train")
+        print("   Validation Metrics:")
+        print_regression_results(metrics["val"], prefix="Val")
+        print("   Test Metrics:")
+        print_regression_results(metrics["test"], prefix="Test")
+
+    return {
+        "best_params": best_params,
+        "model": model,
+        "feature_importance": model_dict["feature_importance"],
+        "metrics": metrics,
+        "predictions": {
+            "train": y_train_pred,
+            "val":   y_val_pred,
+            "test":  y_test_pred
+        },
+        "actuals": {
+            "train": y_train_true,
+            "val":   y_val_true,
+            "test":  y_test_true
+        }
+    }
+
 
 if __name__ == "__main__":
-    print("🚀 XGBoost Forecasting Module - Enhanced Edition")
+    print("🚀 Enhanced Model Building with Optuna Optimization")
     print("=" * 50)
-    print("✅ NEW FEATURES:")
-    print("   🔍 Automatic data leakage validation")
-    print("   📊 NaN monitoring with percentage reporting") 
-    print("   🔧 GPU/CPU resource optimization")
-    print("   📈 Log transform for relative error modeling")
-    print("   ⚠️ Overfitting detection and warnings")
-    print("   🎯 Enhanced early stopping monitoring")
+    print("✅ FEATURES:")
+    print("   🔍 Optuna hyperparameter optimization")
+    print("   📊 Support for day-ahead and week-ahead forecasting")
+    print("   🔧 GPU/CPU optimization")
+    print("   📈 Log transform option for relative errors")
+    print("   🧹 Comprehensive data cleaning and validation")
     print("=" * 50)
-    print("Usage: from src.models.xgboost_forecasting import xgboost_day_ahead_forecast")
-    print("Example: results = xgboost_day_ahead_forecast(train, val, test, features, log_transform=True)") 
+    print("Usage:")
+    print("  from src.models.model_building import train_and_evaluate_dayahead")
+    print("  results = train_and_evaluate_dayahead(train, val, test, features)") 
