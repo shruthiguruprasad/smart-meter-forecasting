@@ -5,7 +5,6 @@
 Stage 0: Consumption Driver Analysis
 - Global driver ranking via SHAP values
 - Feature group importance analysis
-- Diminishing returns analysis (stepwise models)
 - Local household-level insights
 - Comprehensive evaluation and reporting
 
@@ -217,137 +216,6 @@ def analyze_feature_groups(shap_dict: dict, data_dict: dict) -> pd.DataFrame:
     
     return group_df
 
-def analyze_diminishing_returns(data_dict: dict, target_col: str = "total_kwh") -> pd.DataFrame:
-    """
-    Analyze diminishing returns via stepwise models
-    
-    Args:
-        data_dict: Results from prepare_modeling_data
-        target_col: Target variable name
-        
-    Returns:
-        DataFrame with stepwise model performance
-    """
-    print("📉 ANALYZING DIMINISHING RETURNS WITH STEPWISE MODELS")
-    print("=" * 53)
-    
-    X_train = data_dict['X_train'].copy()
-    X_test = data_dict['X_test'].copy()
-    y_train = data_dict['y_train']
-    y_test = data_dict['y_test']
-    feature_groups = data_dict['feature_groups']
-    
-    # Handle categorical variables
-    categorical_cols = X_train.select_dtypes(include=['object']).columns
-    if len(categorical_cols) > 0:
-        print(f"🔄 Encoding {len(categorical_cols)} categorical variables...")
-        from sklearn.preprocessing import LabelEncoder
-        
-        # Create and fit label encoders
-        label_encoders = {}
-        for col in categorical_cols:
-            le = LabelEncoder()
-            # Fit on train data only
-            le.fit(X_train[col].astype(str))
-            # Transform both train and test
-            X_train[col] = le.transform(X_train[col].astype(str))
-            X_test[col] = le.transform(X_test[col].astype(str))
-            label_encoders[col] = le
-    
-    # Define stepwise feature progression
-    stepwise_groups = [
-        ('Calendar + Weather', ['calendar', 'weather']),
-        ('+ Socio-Economic', ['calendar', 'weather', 'socio_economic']),
-        ('+ Time Series', ['calendar', 'weather', 'socio_economic', 'time_series']),
-        ('+ Consumption Patterns', ['calendar', 'weather', 'socio_economic', 'time_series', 'consumption_patterns']),
-        ('+ Time of Day', ['calendar', 'weather', 'socio_economic', 'time_series', 'consumption_patterns', 'time_of_day']),
-        ('Full Model', list(feature_groups.keys()))
-    ]
-    
-    stepwise_results = []
-    
-    for step_name, included_groups in stepwise_groups:
-        # Get features for this step
-        step_features = []
-        for group in included_groups:
-            if group in feature_groups:
-                step_features.extend(feature_groups[group])
-        
-        # Remove duplicates and filter existing features
-        step_features = list(set([f for f in step_features if f in X_train.columns]))
-        
-        if step_features:
-            print(f"🔄 Training: {step_name} ({len(step_features)} features)")
-            
-            # Train model for this step
-            model = xgb.XGBRegressor(
-                max_depth=6, 
-                learning_rate=0.1, 
-                n_estimators=100,
-                random_state=42, 
-                n_jobs=-1,
-                tree_method='hist'  # Use histogram-based algorithm
-            )
-            
-            X_train_step = X_train[step_features]
-            X_test_step = X_test[step_features]
-            
-            # Convert to DMatrix
-            dtrain = xgb.DMatrix(X_train_step, label=y_train)
-            dtest = xgb.DMatrix(X_test_step, label=y_test)
-            
-            # Train model
-            model.fit(
-                X_train_step, 
-                y_train,
-                eval_set=[(X_test_step, y_test)],
-                early_stopping_rounds=10,
-                verbose=False
-            )
-            
-            y_pred = model.predict(X_test_step)
-            
-            # Calculate metrics
-            r2 = r2_score(y_test, y_pred)
-            mae = mean_absolute_error(y_test, y_pred)
-            rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-            
-            stepwise_results.append({
-                'step': step_name,
-                'feature_count': len(step_features),
-                'r2': r2,
-                'mae': mae,
-                'rmse': rmse,
-                'variance_explained_pct': r2 * 100
-            })
-    
-    # Convert to dataframe
-    stepwise_df = pd.DataFrame(stepwise_results)
-    
-    # Calculate incremental gains
-    stepwise_df['r2_gain'] = stepwise_df['r2'].diff()
-    stepwise_df['variance_gain_pct'] = stepwise_df['r2_gain'] * 100
-    
-    print(f"\n📊 STEPWISE MODEL PERFORMANCE:")
-    print("-" * 70)
-    print(f"{'Step':<25} | {'Features':>8} | {'R²':>6} | {'Gain':>6} | {'MAE':>7}")
-    print("-" * 70)
-    
-    for _, row in stepwise_df.iterrows():
-        gain_str = f"+{row['variance_gain_pct']:.1f}%" if not pd.isna(row['variance_gain_pct']) else "   -  "
-        print(f"{row['step']:<25} | {row['feature_count']:>8} | {row['r2']:>6.3f} | {gain_str:>6} | {row['mae']:>7.3f}")
-    
-    # Identify diminishing returns point
-    if len(stepwise_df) > 1:
-        gains = stepwise_df['variance_gain_pct'].dropna()
-        if len(gains) > 0:
-            avg_gain = gains.mean()
-            diminishing_point = stepwise_df[stepwise_df['variance_gain_pct'] < avg_gain/2].index
-            if len(diminishing_point) > 0:
-                print(f"\n📉 Diminishing returns start at: {stepwise_df.loc[diminishing_point[0], 'step']}")
-    
-    return stepwise_df
-
 def get_local_household_insights(shap_dict: dict, data_dict: dict, 
                                household_samples: int = 3) -> dict:
     """
@@ -445,9 +313,6 @@ def generate_consumption_driver_report(stage0_results: dict) -> dict:
     print("\n" + "="*15 + " FEATURE GROUP ANALYSIS " + "="*15)
     group_analysis = analyze_feature_groups(shap_dict, data_dict)
     
-    print("\n" + "="*15 + " DIMINISHING RETURNS " + "="*15)
-    stepwise_analysis = analyze_diminishing_returns(data_dict)
-    
     print("\n" + "="*15 + " LOCAL INSIGHTS " + "="*15)
     household_insights = get_local_household_insights(shap_dict, data_dict, household_samples=3)
     
@@ -459,11 +324,11 @@ def generate_consumption_driver_report(stage0_results: dict) -> dict:
             'top_driver': driver_ranking.iloc[0]['feature'],
             'most_important_group': group_analysis.iloc[0]['group'],
             'total_features': len(data_dict['feature_cols']),
-            'feature_groups': len(data_dict['feature_groups'])
+            'feature_groups': len(data_dict['feature_groups']),
+            'model_quality': 'EXCELLENT' if performance['test']['r2'] > 0.95 else 'GOOD' if performance['test']['r2'] > 0.80 else 'FAIR'
         },
         'driver_ranking': driver_ranking,
         'group_analysis': group_analysis,
-        'stepwise_analysis': stepwise_analysis,
         'household_insights': household_insights,
         'performance': performance
     }
@@ -472,11 +337,12 @@ def generate_consumption_driver_report(stage0_results: dict) -> dict:
     print("\n🎉 CONSUMPTION DRIVER ANALYSIS COMPLETED!")
     print("=" * 46)
     print("📊 EXECUTIVE SUMMARY:")
-    print(f"   Model explains {performance['variance_explained']:.1f}% of consumption variance")
+    print(f"   Model Quality: {report['summary']['model_quality']}")
+    print(f"   Variance Explained: {performance['variance_explained']:.1f}%")
+    print(f"   Test RMSE: {performance['test']['rmse']:.3f} kWh")
+    print(f"   Test R²: {performance['test']['r2']:.4f}")
     print(f"   Top driver: {driver_ranking.iloc[0]['feature']}")
     print(f"   Most important group: {group_analysis.iloc[0]['group']} ({group_analysis.iloc[0]['contribution_pct']:.1f}%)")
-    print(f"   Prediction accuracy: {performance['test']['mae']:.2f} kWh MAE")
-    print("   Ready for forecasting model development")
     
     return report
 

@@ -5,7 +5,6 @@
 Stage 0: Visualization for Consumption Driver Analysis
 - SHAP summary plots and dependence plots
 - Feature group importance charts
-- Stepwise model performance visualization
 - Local household waterfall plots
 - Interactive dashboards for consumption drivers
 
@@ -290,81 +289,6 @@ def plot_shap_waterfall_local(household_insights: dict,
     
     return fig
 
-def plot_diminishing_returns(stepwise_analysis: pd.DataFrame,
-                           figsize: tuple = (12, 6),
-                           save_path: str = None) -> plt.Figure:
-    """
-    Plot stepwise model performance for diminishing returns analysis
-    
-    Args:
-        stepwise_analysis: DataFrame from analyze_diminishing_returns
-        figsize: Figure size tuple
-        save_path: Path to save plot (optional)
-        
-    Returns:
-        Matplotlib figure object
-    """
-    print("📊 Creating diminishing returns visualization...")
-    
-    # Create figure with dual y-axis
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
-    
-    # Plot 1: R² progression
-    x_pos = range(len(stepwise_analysis))
-    
-    bars1 = ax1.bar(x_pos, stepwise_analysis['variance_explained_pct'], 
-                    color=plt.cm.Blues(np.linspace(0.4, 1, len(stepwise_analysis))),
-                    alpha=0.8, edgecolor='navy', linewidth=1)
-    
-    ax1.set_xticks(x_pos)
-    ax1.set_xticklabels([s.replace('+ ', '+\n') for s in stepwise_analysis['step']], 
-                        rotation=45, ha='right', fontsize=9)
-    ax1.set_ylabel('Variance Explained (%)', fontweight='bold')
-    ax1.set_title('Model Performance Progression', fontweight='bold')
-    
-    # Add value labels
-    for bar, value in zip(bars1, stepwise_analysis['variance_explained_pct']):
-        ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
-                f'{value:.1f}%', ha='center', va='bottom', fontsize=9, fontweight='bold')
-    
-    ax1.grid(True, alpha=0.3, axis='y')
-    ax1.set_ylim(0, stepwise_analysis['variance_explained_pct'].max() * 1.1)
-    
-    # Plot 2: Feature count vs R² gain
-    gains = stepwise_analysis['variance_gain_pct'].fillna(0)
-    
-    ax2.plot(stepwise_analysis['feature_count'], stepwise_analysis['variance_explained_pct'], 
-             'o-', linewidth=3, markersize=8, color='darkgreen', label='Cumulative R²')
-    
-    # Add bars for incremental gains
-    ax2_twin = ax2.twinx()
-    bars2 = ax2_twin.bar(stepwise_analysis['feature_count'], gains,
-                        alpha=0.6, color='orange', width=2, label='Incremental Gain')
-    
-    ax2.set_xlabel('Number of Features', fontweight='bold')
-    ax2.set_ylabel('Variance Explained (%)', fontweight='bold', color='darkgreen')
-    ax2_twin.set_ylabel('Incremental Gain (%)', fontweight='bold', color='orange')
-    ax2.set_title('Diminishing Returns Analysis', fontweight='bold')
-    
-    # Color the y-axis labels
-    ax2.tick_params(axis='y', labelcolor='darkgreen')
-    ax2_twin.tick_params(axis='y', labelcolor='orange')
-    
-    ax2.grid(True, alpha=0.3)
-    
-    # Add legends
-    lines1, labels1 = ax2.get_legend_handles_labels()
-    lines2, labels2 = ax2_twin.get_legend_handles_labels()
-    ax2.legend(lines1 + lines2, labels1 + labels2, loc='center right')
-    
-    plt.tight_layout()
-    
-    if save_path:
-        fig.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✅ Plot saved to: {save_path}")
-    
-    return fig
-
 def plot_partial_dependence(model_dict: dict, data_dict: dict,
                            top_features: list = None,
                            figsize: tuple = (12, 8),
@@ -425,7 +349,7 @@ def create_driver_analysis_dashboard(analysis_report: dict,
                                    save_dir: str = "plots/",
                                    show_plots: bool = True) -> dict:
     """
-    Create comprehensive dashboard of all consumption driver visualizations
+    Create comprehensive dashboard of consumption driver visualizations
     
     Args:
         analysis_report: Results from generate_consumption_driver_report
@@ -458,21 +382,14 @@ def create_driver_analysis_dashboard(analysis_report: dict,
         save_path=f"{save_dir}/group_importance.png"
     )
     
-    # 3. Diminishing returns
-    print("📊 Creating diminishing returns analysis...")
-    figures['diminishing_returns'] = plot_diminishing_returns(
-        analysis_report['stepwise_analysis'],
-        save_path=f"{save_dir}/diminishing_returns.png"
-    )
-    
-    # 4. Local household insights
+    # 3. Local household insights
     print("📊 Creating household waterfall plots...")
     figures['household_waterfalls'] = plot_shap_waterfall_local(
         analysis_report['household_insights'],
         save_path=f"{save_dir}/household_waterfalls.png"
     )
     
-    print("\n🎉 DASHBOARD CREATION COMPLETED!")
+    print(f"\n🎉 DASHBOARD CREATION COMPLETED!")
     print(f"✅ {len(figures)} visualizations created")
     print(f"✅ Plots saved to: {save_dir}")
     
