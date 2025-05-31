@@ -162,33 +162,51 @@ def get_forecasting_features(df: pd.DataFrame) -> list:
     Returns:
         List of feature column names
     """
-    # Patterns to exclude for proper forecasting (prevent data leakage)
-    exclude_patterns = [
-        "LCLid", "day", "holiday_type",  # Basic exclusions
+    # Explicit list of columns to exclude for proper forecasting (prevent data leakage)
+    exclude_exact = {
+        # Basic exclusions
+        "LCLid", "day", "holiday_type",
         # ⚠️ CRITICAL: Exclude ALL consumption-derived features to prevent data leakage
         "total_kwh", "mean_kwh", "std_kwh", "peak_kwh", "min_kwh",  # Direct consumption stats
         "morning_kwh", "afternoon_kwh", "evening_kwh", "night_kwh",  # Time-of-day consumption
         "peak_period_kwh", "off_peak_kwh",  # Peak period consumption
-        "base_load", "load_factor",  # Load metrics derived from consumption
+        "base_load", "load_factor", "base_load_ratio",  # Load metrics derived from consumption
         "daily_variability", "coefficient_of_variation",  # Consumption variability
-        "usage_concentration", "peak_sharpness", "base_load_ratio",  # Consumption patterns
+        "usage_concentration", "peak_sharpness",  # Consumption patterns
         "peak_to_mean_ratio", "peak_to_total_ratio", "day_night_ratio",  # Consumption ratios
         "holiday_consumption_boost",  # Holiday-consumption interactions
         "consumption_sharpness"  # Additional consumption patterns
+    }
+    
+    # Additional patterns to check for partial matches
+    exclude_patterns = [
+        "_kwh",  # Any column ending with _kwh (consumption related)
+        "consumption",  # Any column with consumption in the name
     ]
     
     feature_cols = []
     excluded_count = 0
     
+    print(f"🔍 Scanning {len(df.columns)} columns for features...")
+    
     for col in df.columns:
-        # Skip excluded patterns
+        # Skip if exact match in exclude list
+        if col in exclude_exact:
+            excluded_count += 1
+            print(f"   🚫 Excluded (exact): {col}")
+            continue
+            
+        # Skip if partial pattern match
         exclude_this = False
         for pattern in exclude_patterns:
-            if pattern in col:
-                exclude_this = True
-                excluded_count += 1
-                break
-                
+            if pattern in col and col != "target_col":  # Make sure we don't accidentally exclude legitimate features
+                # But allow lag/roll features that contain kwh patterns
+                if not any(time_pattern in col for time_pattern in ['lag', 'roll', 'delta', 'pct_change']):
+                    exclude_this = True
+                    excluded_count += 1
+                    print(f"   🚫 Excluded (pattern '{pattern}'): {col}")
+                    break
+                    
         if exclude_this:
             continue
             
@@ -198,9 +216,16 @@ def get_forecasting_features(df: pd.DataFrame) -> list:
             continue
             
         feature_cols.append(col)
+        print(f"   ✅ Included: {col}")
     
-    print(f"📊 Selected {len(feature_cols)} forecasting features (leakage-safe)")
+    print(f"\n📊 Selected {len(feature_cols)} forecasting features (leakage-safe)")
     print(f"🚫 Excluded {excluded_count} target-related/raw features to prevent data leakage")
+    
+    # SAFETY CHECK: Ensure target is not in features
+    if "total_kwh" in feature_cols:
+        print(f"❌ CRITICAL ERROR: total_kwh still in features! Removing manually.")
+        feature_cols.remove("total_kwh")
+    
     return feature_cols
 
 def add_group_and_household_features(train_df, test_df):
