@@ -45,9 +45,9 @@ CONFIG = {
     'sample_household': None,  # Will auto-select first available
     'save_plots': True,
     'plot_dir': 'plots/xgboost_notebook/',
-    'use_gpu': False,  # Set to True if you have GPU support
+    'use_gpu': True,  # ✅ Set to True to test GPU support
     'week_ahead_days': 7,  # For week-ahead forecasting
-    'log_transform': False  # Set to True for relative error modeling
+    'log_transform': True  # ✅ Set to True to test relative error modeling
 }
 
 print("🚀 ENHANCED XGBOOST FORECASTING FOR SMART METER DATA")
@@ -55,9 +55,10 @@ print("=" * 60)
 print("📊 ENHANCED IMPLEMENTATION with:")
 print("   ✅ Day-ahead forecasting with automatic validation")
 print("   ✅ Week-ahead forecasting with proper target handling")
-print("   ✅ Automatic data leakage detection")
-print("   ✅ GPU/CPU resource optimization")
-print("   ✅ Log transform option for relative errors")
+print("   ✅ Automatic data leakage detection & prevention")
+print("   ✅ GPU acceleration enabled" if CONFIG['use_gpu'] else "   💻 CPU processing")
+print("   ✅ Log transform for relative error modeling" if CONFIG['log_transform'] else "   📊 Linear scale modeling")
+print("   ✅ NaN monitoring and reporting")
 print("   ✅ Comprehensive evaluation and visualization")
 print("=" * 60)
 print(f"📊 Configuration:")
@@ -105,15 +106,16 @@ weather_features = [f for f in feature_cols if any(x in f for x in ['temp', 'hea
 lag_features = [f for f in feature_cols if any(x in f for x in ['lag', 'roll'])]
 household_features = [f for f in feature_cols if any(x in f for x in ['hh_avg', 'hh_std', 'hh_max', 'hh_min', 'acorn', 'Acorn'])]
 interaction_features = [f for f in feature_cols if any(x in f for x in ['weekend_heating', 'holiday_heating', 'summer_cooling'])]
-consumption_features = [f for f in feature_cols if any(x in f for x in ['total', 'mean', 'peak', 'min', 'std', 'morning', 'afternoon', 'evening', 'night']) and 'hh_' not in f]
+peak_timing_features = [f for f in feature_cols if any(x in f for x in ['peak_hour', 'is_morning_peak', 'is_evening_peak', 'is_off_peak'])]
 
-print(f"\n📊 Feature breakdown:")
+print(f"\n📊 Feature breakdown (LEAKAGE-SAFE):")
 print(f"   🕐 Temporal: {len(temporal_features)} features")
 print(f"   🌤️ Weather: {len(weather_features)} features") 
 print(f"   📈 Lag/Rolling: {len(lag_features)} features")
 print(f"   🏠 Household: {len(household_features)} features")
 print(f"   🔗 Interactions: {len(interaction_features)} features")
-print(f"   ⚡ Consumption: {len(consumption_features)} features")
+print(f"   ⏰ Peak Timing: {len(peak_timing_features)} features")
+print(f"   🚫 Consumption features EXCLUDED to prevent data leakage")
 
 #%% ================================================================
 # STEP 2: HOUSEHOLD SELECTION AND DATA OVERVIEW

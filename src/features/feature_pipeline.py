@@ -107,19 +107,47 @@ def get_forecasting_feature_groups(df: pd.DataFrame) -> dict:
     Returns:
         Dictionary of feature groups
     """
-    exclude_patterns = ["LCLid", "day", "holiday_type"]
-    all_cols = [col for col in df.columns 
-                if not any(pattern in col for pattern in exclude_patterns)
-                and not (col.startswith('hh_') and col.replace('hh_', '').isdigit())]
+    # Patterns to exclude for proper forecasting (same as get_forecasting_features)
+    exclude_patterns = [
+        "LCLid", "day", "holiday_type",  # Basic exclusions
+        # ⚠️ CRITICAL: Exclude ALL consumption-derived features to prevent data leakage
+        "total_kwh", "mean_kwh", "std_kwh", "peak_kwh", "min_kwh",  # Direct consumption stats
+        "morning_kwh", "afternoon_kwh", "evening_kwh", "night_kwh",  # Time-of-day consumption
+        "peak_period_kwh", "off_peak_kwh",  # Peak period consumption
+        "base_load", "load_factor",  # Load metrics derived from consumption
+        "daily_variability", "coefficient_of_variation",  # Consumption variability
+        "usage_concentration", "peak_sharpness", "base_load_ratio",  # Consumption patterns
+        "peak_to_mean_ratio", "peak_to_total_ratio", "day_night_ratio",  # Consumption ratios
+        "holiday_consumption_boost",  # Holiday-consumption interactions
+        "consumption_sharpness"  # Additional consumption patterns
+    ]
+    
+    # Get leakage-safe feature columns
+    all_cols = []
+    for col in df.columns:
+        # Skip excluded patterns
+        exclude_this = False
+        for pattern in exclude_patterns:
+            if pattern in col:
+                exclude_this = True
+                break
+                
+        if exclude_this:
+            continue
+            
+        # Skip raw half-hourly data
+        if col.startswith('hh_') and col.replace('hh_', '').isdigit():
+            continue
+            
+        all_cols.append(col)
     
     feature_groups = {
-        'consumption_basic': [c for c in all_cols if any(x in c for x in ['total', 'mean', 'peak', 'min', 'std'])],
-        'time_of_day': [c for c in all_cols if any(x in c for x in ['morning', 'afternoon', 'evening', 'night'])],
-        'consumption_patterns': [c for c in all_cols if any(x in c for x in ['ratio', 'variability', 'concentration', 'sharpness'])],
         'weather': [c for c in all_cols if any(x in c for x in ['temp', 'heating', 'cooling', 'humidity', 'wind', 'cloud'])],
-        'temporal': [c for c in all_cols if any(x in c for x in ['dayofweek', 'weekend', 'month', 'season', 'holiday'])],
-        'time_series': [c for c in all_cols if any(x in c for x in ['lag', 'roll', 'delta', 'pct_change'])],
-        'household': [c for c in all_cols if any(x in c for x in ['acorn', 'hh_avg', 'hh_std', 'hh_max', 'hh_min', 'daily_vs'])]
+        'temporal': [c for c in all_cols if any(x in c for x in ['dayofweek', 'weekend', 'month', 'season', 'holiday', 'quarter'])],
+        'time_series': [c for c in all_cols if any(x in c for x in ['lag', 'roll', 'delta', 'pct_change', 'weekly'])],
+        'household': [c for c in all_cols if any(x in c for x in ['acorn', 'hh_avg', 'hh_std', 'hh_max', 'hh_min', 'daily_vs'])],
+        'peak_timing': [c for c in all_cols if any(x in c for x in ['peak_hour', 'is_morning_peak', 'is_evening_peak', 'is_off_peak'])],
+        'interactions': [c for c in all_cols if any(x in c for x in ['weekend_heating', 'summer_cooling', 'holiday_heating', 'weekday_heating'])]
     }
     
     return feature_groups
@@ -134,19 +162,45 @@ def get_forecasting_features(df: pd.DataFrame) -> list:
     Returns:
         List of feature column names
     """
-    exclude_patterns = ["LCLid", "day", "holiday_type"]
+    # Patterns to exclude for proper forecasting (prevent data leakage)
+    exclude_patterns = [
+        "LCLid", "day", "holiday_type",  # Basic exclusions
+        # ⚠️ CRITICAL: Exclude ALL consumption-derived features to prevent data leakage
+        "total_kwh", "mean_kwh", "std_kwh", "peak_kwh", "min_kwh",  # Direct consumption stats
+        "morning_kwh", "afternoon_kwh", "evening_kwh", "night_kwh",  # Time-of-day consumption
+        "peak_period_kwh", "off_peak_kwh",  # Peak period consumption
+        "base_load", "load_factor",  # Load metrics derived from consumption
+        "daily_variability", "coefficient_of_variation",  # Consumption variability
+        "usage_concentration", "peak_sharpness", "base_load_ratio",  # Consumption patterns
+        "peak_to_mean_ratio", "peak_to_total_ratio", "day_night_ratio",  # Consumption ratios
+        "holiday_consumption_boost",  # Holiday-consumption interactions
+        "consumption_sharpness"  # Additional consumption patterns
+    ]
+    
     feature_cols = []
+    excluded_count = 0
     
     for col in df.columns:
         # Skip excluded patterns
-        if any(pattern in col for pattern in exclude_patterns):
+        exclude_this = False
+        for pattern in exclude_patterns:
+            if pattern in col:
+                exclude_this = True
+                excluded_count += 1
+                break
+                
+        if exclude_this:
             continue
-        # Skip if it looks like raw half-hourly data (hh_0, hh_1, etc.) but NOT derived features
+            
+        # Skip if it looks like raw half-hourly data (hh_0, hh_1, etc.)
         if col.startswith('hh_') and col.replace('hh_', '').isdigit():
+            excluded_count += 1
             continue
+            
         feature_cols.append(col)
     
-    print(f"📊 Selected {len(feature_cols)} forecasting features")
+    print(f"📊 Selected {len(feature_cols)} forecasting features (leakage-safe)")
+    print(f"🚫 Excluded {excluded_count} target-related/raw features to prevent data leakage")
     return feature_cols
 
 def add_group_and_household_features(train_df, test_df):
