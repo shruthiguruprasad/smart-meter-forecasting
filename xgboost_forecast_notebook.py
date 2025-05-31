@@ -24,17 +24,17 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # Import our enhanced modules
-from src.data.data_loader import load_all_raw_data
-from src.data.data_cleaner import clean_all_data
-from src.features.feature_pipeline import create_comprehensive_features
-from src.data.splitters import prepare_forecasting_data, prepare_weekahead_data
-from src.models.xgboost_forecasting import (
+from data.data_loader import load_all_raw_data
+from data.data_cleaner import clean_and_merge_all_data     # or clean_all_data, whichever you use
+from features.feature_pipeline import create_comprehensive_features
+from features.splitters import prepare_forecasting_data, prepare_weekahead_data_with_raw
+from models.xgboost_forecasting import (
     train_and_evaluate_dayahead,
     train_and_evaluate_weekahead,
     prepare_xgboost_data,
     predict_xgboost
 )
-from src.evaluation.forecast_evaluation import (
+from evaluation.forecast_evaluation import (
     compute_regression_metrics,
     print_regression_results,
     evaluate_forecast_model,
@@ -84,7 +84,7 @@ print("📂 Loading raw smart meter data...")
 raw_data = load_all_raw_data(CONFIG['data_path'])
 
 print("🧹 Cleaning data...")
-cleaned_data = clean_all_data(raw_data)
+cleaned_data = clean_and_merge_all_data(raw_data)   # or clean_all_data(raw_data), depending on your naming
 
 print("🔧 Creating comprehensive leakage-safe features...")
 df_features = create_comprehensive_features(cleaned_data)
@@ -103,8 +103,10 @@ print("\n2️⃣ STEP 2: DATA SPLITTING")
 print("-" * 30)
 
 print("📊 Preparing day-ahead forecasting data...")
+# Note: We no longer pass `household_meta` here—static columns (Acorn, stdorToU, etc.) have
+# already been merged into df_features upstream.
 train_df, val_df, test_df, feature_cols, target_col, feature_groups = prepare_forecasting_data(
-    df_features, 
+    df_features,
     target_col="total_kwh", 
     test_days=CONFIG['test_days'], 
     val_days=CONFIG['val_days']
@@ -118,7 +120,9 @@ print(f"   🔧 Features: {len(feature_cols)}")
 print(f"   🎯 Target: {target_col}")
 
 print("\n📅 Preparing week-ahead forecasting data...")
-train_df7, val_df7, test_df7, feature_cols7, target7, feature_groups7 = prepare_weekahead_data(
+# Again, no `household_meta` argument
+train_df7, val_df7, test_df7, feature_cols7, target7, feature_groups7 = prepare_weekahead_data_with_raw(
+    raw_data,
     df_features,
     test_days=CONFIG['test_days'],
     val_days=CONFIG['val_days']
@@ -150,7 +154,7 @@ selected_household = CONFIG['sample_household'] or available_households[0]
 print(f"🏠 Available households: {len(available_households)}")
 print(f"🏠 Selected household: {selected_household}")
 
-# Get household statistics
+# Get household statistics using the correct target column (label_1, not total_kwh)
 household_train = train_df[train_df['LCLid'] == selected_household]
 print(f"📊 Household consumption profile:")
 print(f"   📈 Average: {household_train[target_col].mean():.2f} kWh/day")
@@ -464,4 +468,4 @@ print(f"\n✅ Enhanced XGBoost forecasting pipeline completed successfully!")
 print(f"   🔧 Total features engineered: {len(feature_cols)}")
 print(f"   🎯 Optuna trials completed: {CONFIG['n_trials']}")
 print(f"   📊 Models trained and evaluated: 2")
-print(f"   📁 Plots saved: {CONFIG['save_plots']}") 
+print(f"   📁 Plots saved: {CONFIG['save_plots']}")

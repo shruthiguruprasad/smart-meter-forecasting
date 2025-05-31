@@ -28,10 +28,10 @@ warnings.filterwarnings("ignore")
 
 def prepare_xgboost_data(
     train_df: pd.DataFrame,
-    val_df: pd.DataFrame,
-    test_df: pd.DataFrame,
-    feature_cols: list,
-    target_col: str = "total_kwh",
+                        val_df: pd.DataFrame,
+                        test_df: pd.DataFrame,
+                        feature_cols: list,
+                        target_col: str = "total_kwh",
     categorical_cols: list = None,
     log_transform: bool = False
 ) -> dict:
@@ -62,7 +62,7 @@ def prepare_xgboost_data(
     y_train = train_df[target_col].values
     y_val   = val_df[target_col].values
     y_test  = test_df[target_col].values
-
+    
     # 3) Log-transform target if requested
     if log_transform:
         print("   📈 Applying log1p transform to target variable...")
@@ -86,7 +86,7 @@ def prepare_xgboost_data(
             X_val[col]   = le.transform(X_val[col].astype(str))
             X_test[col]  = le.transform(X_test[col].astype(str))
             label_encoders[col] = le
-
+    
     # 5) Drop rows with NaN in X or y
     def drop_na(X: pd.DataFrame, y: np.ndarray):
         mask_X = ~X.isna().any(axis=1)
@@ -112,7 +112,7 @@ def prepare_xgboost_data(
         print(f"      Test: {test_dropped} ({(test_dropped/orig_test_len)*100:.1f}%)")
 
     print(f"   ✅ Data prepared: Train={len(X_train)}, Val={len(X_val)}, Test={len(X_test)}")
-
+    
     return {
         "X_train": X_train,
         "y_train": y_train,
@@ -154,10 +154,10 @@ def create_xgboost_model(
     
     if use_gpu:
         default_params["n_jobs"] = 1  # Avoid CPU+GPU conflicts
-        
+    
     if params:
         default_params.update(params)
-
+    
     model = xgb.XGBRegressor(**default_params)
     print(f"   ✅ XGBoost model created with {default_params['n_estimators']} estimators "
           f"and tree_method='{default_params['tree_method']}'")
@@ -166,9 +166,9 @@ def create_xgboost_model(
 
 def train_xgboost_model(
     data_dict: dict,
-    params: dict = None,
-    use_gpu: bool = False,
-    early_stopping_rounds: int = 50,
+                             params: dict = None,
+                             use_gpu: bool = False,
+                             early_stopping_rounds: int = 50,
     verbose: bool = False
 ) -> dict:
     """
@@ -208,7 +208,7 @@ def train_xgboost_model(
     }).sort_values("importance", ascending=False).reset_index(drop=True)
 
     print(f"   ✅ Model trained with best_iteration = {best_iter + 1}")
-
+    
     return {
         "model": model,
         "best_iteration": best_iter,
@@ -335,12 +335,12 @@ def optimize_xgboost_hyperparams(
 
 def train_and_evaluate_dayahead(
     train_df: pd.DataFrame,
-    val_df: pd.DataFrame,
-    test_df: pd.DataFrame,
-    feature_cols: list,
-    target_col: str = "total_kwh",
+                               val_df: pd.DataFrame,
+                               test_df: pd.DataFrame,
+                               feature_cols: list,
+                               target_col: str = "total_kwh",
     categorical_cols: list = None,
-    use_gpu: bool = False,
+                               use_gpu: bool = False,
     n_trials: int = 50,
     log_transform: bool = False
 ) -> dict:
@@ -445,9 +445,9 @@ def train_and_evaluate_dayahead(
 
 def train_and_evaluate_weekahead(
     train_df: pd.DataFrame,
-    val_df: pd.DataFrame,
-    test_df: pd.DataFrame,
-    feature_cols: list,
+                                    val_df: pd.DataFrame,
+                                    test_df: pd.DataFrame,
+                                    feature_cols: list,
     target_col: str = "label_7",
     categorical_cols: list = None,
     use_gpu: bool = False,
