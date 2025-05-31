@@ -36,14 +36,41 @@ def evaluate_model_performance(model_dict: dict, data_dict: dict) -> dict:
     print("=" * 32)
     
     model = model_dict['model']
-    X_train = data_dict['X_train']
-    X_test = data_dict['X_test']
-    y_train = data_dict['y_train']
-    y_test = data_dict['y_test']
     
-    # Get predictions
-    y_train_pred = model.predict(X_train)
-    y_test_pred = model.predict(X_test)
+    # Handle case where data_dict might have different keys
+    if 'X_train' in data_dict and 'X_test' in data_dict:
+        X_train = data_dict['X_train'].copy()
+        X_test = data_dict['X_test'].copy()
+        y_train = data_dict['y_train']
+        y_test = data_dict['y_test']
+    else:
+        # Handle case where we might have different data structure
+        raise ValueError("Expected X_train, X_test, y_train, y_test in data_dict")
+    
+    # Handle categorical variables
+    categorical_cols = X_train.select_dtypes(include=['object']).columns
+    label_encoders = {}
+    if len(categorical_cols) > 0:
+        print(f"🔄 Encoding {len(categorical_cols)} categorical variables...")
+        from sklearn.preprocessing import LabelEncoder
+        
+        # Create and fit label encoders
+        for col in categorical_cols:
+            le = LabelEncoder()
+            # Fit on train data only
+            le.fit(X_train[col].astype(str))
+            # Transform both train and test
+            X_train[col] = le.transform(X_train[col].astype(str))
+            X_test[col] = le.transform(X_test[col].astype(str))
+            label_encoders[col] = le
+    
+    # Convert to DMatrix for XGBoost predictions
+    dtrain = xgb.DMatrix(X_train, label=y_train)
+    dtest = xgb.DMatrix(X_test, label=y_test)
+    
+    # Get predictions using DMatrix
+    y_train_pred = model.predict(dtrain)
+    y_test_pred = model.predict(dtest)
     
     # Calculate comprehensive metrics
     performance = {
@@ -73,6 +100,13 @@ def evaluate_model_performance(model_dict: dict, data_dict: dict) -> dict:
     print(f"   Test RMSE: {performance['test']['rmse']:.4f} kWh")
     print(f"   Test MAPE: {performance['test']['mape']:.1f}%")
     print(f"   Relative Error: {performance['relative_error']:.1f}%")
+    
+    # Return additional data for other functions
+    performance['label_encoders'] = label_encoders
+    performance['X_train'] = X_train
+    performance['X_test'] = X_test
+    performance['y_train'] = y_train
+    performance['y_test'] = y_test
     
     return performance
 
@@ -197,19 +231,36 @@ def analyze_diminishing_returns(data_dict: dict, target_col: str = "total_kwh") 
     print("📉 ANALYZING DIMINISHING RETURNS WITH STEPWISE MODELS")
     print("=" * 53)
     
-    X_train = data_dict['X_train']
-    X_test = data_dict['X_test']
+    X_train = data_dict['X_train'].copy()
+    X_test = data_dict['X_test'].copy()
     y_train = data_dict['y_train']
     y_test = data_dict['y_test']
     feature_groups = data_dict['feature_groups']
+    
+    # Handle categorical variables
+    categorical_cols = X_train.select_dtypes(include=['object']).columns
+    if len(categorical_cols) > 0:
+        print(f"🔄 Encoding {len(categorical_cols)} categorical variables...")
+        from sklearn.preprocessing import LabelEncoder
+        
+        # Create and fit label encoders
+        label_encoders = {}
+        for col in categorical_cols:
+            le = LabelEncoder()
+            # Fit on train data only
+            le.fit(X_train[col].astype(str))
+            # Transform both train and test
+            X_train[col] = le.transform(X_train[col].astype(str))
+            X_test[col] = le.transform(X_test[col].astype(str))
+            label_encoders[col] = le
     
     # Define stepwise feature progression
     stepwise_groups = [
         ('Calendar + Weather', ['calendar', 'weather']),
         ('+ Socio-Economic', ['calendar', 'weather', 'socio_economic']),
-        ('+ Past Use', ['calendar', 'weather', 'socio_economic', 'past_use']),
-        ('+ Consumption Patterns', ['calendar', 'weather', 'socio_economic', 'past_use', 'consumption_patterns']),
-        ('+ Time of Day', ['calendar', 'weather', 'socio_economic', 'past_use', 'consumption_patterns', 'time_of_day']),
+        ('+ Time Series', ['calendar', 'weather', 'socio_economic', 'time_series']),
+        ('+ Consumption Patterns', ['calendar', 'weather', 'socio_economic', 'time_series', 'consumption_patterns']),
+        ('+ Time of Day', ['calendar', 'weather', 'socio_economic', 'time_series', 'consumption_patterns', 'time_of_day']),
         ('Full Model', list(feature_groups.keys()))
     ]
     
@@ -230,14 +281,30 @@ def analyze_diminishing_returns(data_dict: dict, target_col: str = "total_kwh") 
             
             # Train model for this step
             model = xgb.XGBRegressor(
-                max_depth=6, learning_rate=0.1, n_estimators=100,
-                random_state=42, n_jobs=-1
+                max_depth=6, 
+                learning_rate=0.1, 
+                n_estimators=100,
+                random_state=42, 
+                n_jobs=-1,
+                tree_method='hist'  # Use histogram-based algorithm
             )
             
             X_train_step = X_train[step_features]
             X_test_step = X_test[step_features]
             
-            model.fit(X_train_step, y_train)
+            # Convert to DMatrix
+            dtrain = xgb.DMatrix(X_train_step, label=y_train)
+            dtest = xgb.DMatrix(X_test_step, label=y_test)
+            
+            # Train model
+            model.fit(
+                X_train_step, 
+                y_train,
+                eval_set=[(X_test_step, y_test)],
+                early_stopping_rounds=10,
+                verbose=False
+            )
+            
             y_pred = model.predict(X_test_step)
             
             # Calculate metrics
