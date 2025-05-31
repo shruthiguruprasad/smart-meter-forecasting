@@ -47,8 +47,7 @@ CONFIG = {
     'plot_dir': 'plots/xgboost_notebook/',
     'use_gpu': False,  # Set to True if you have GPU support
     'week_ahead_days': 7,  # For week-ahead forecasting
-    'log_transform': False,  # Set to True for relative error modeling
-    'use_critical_features_only': True  # Use minimal feature set for better performance
+    'log_transform': False  # Set to True for relative error modeling
 }
 
 print("🚀 ENHANCED XGBOOST FORECASTING FOR SMART METER DATA")
@@ -90,39 +89,6 @@ train_df, val_df, test_df, feature_cols, target_col, feature_groups = prepare_fo
     val_days=CONFIG['val_days']
 )
 
-# 🎯 OPTIONAL: Use critical-only feature set
-if CONFIG['use_critical_features_only']:
-    print("\n🎯 USING CRITICAL-ONLY FEATURE SET...")
-    print("-" * 40)
-    
-    # Define critical features for optimal performance
-    critical_features = [
-        # Temporal/Calendar features
-        'dayofweek_sin', 'dayofweek_cos', 'is_holiday', 'is_weekend',
-        # Lag/Rolling features (autoregressive patterns)
-        'lag1_total', 'lag7_total', 'roll7_total_mean', 'roll14_total_mean',
-        # Weather features (energy drivers)
-        'temp_avg', 'heating_degree_days', 'cooling_degree_days',
-        # Household baseline
-        'hh_avg_consumption',
-        # Interaction features
-        'weekend_heating', 'holiday_heating_interaction'
-    ]
-    
-    # Filter to only features that exist in the data
-    available_critical = [f for f in critical_features if f in feature_cols]
-    missing_critical = [f for f in critical_features if f not in feature_cols]
-    
-    print(f"📊 Available critical features: {len(available_critical)} out of {len(critical_features)} desired")
-    print(f"📊 Using {len(available_critical)} critical features instead of {len(feature_cols)} total features")
-    
-    if missing_critical:
-        print(f"⚠️ Missing critical features: {missing_critical}")
-    else:
-        print("✅ All critical features are available!")
-    
-    feature_cols = available_critical
-
 print(f"\n✅ Enhanced data preparation completed:")
 print(f"   Training samples: {len(train_df):,}")
 print(f"   Validation samples: {len(val_df):,}")
@@ -132,6 +98,22 @@ print(f"   Target: {target_col}")
 print(f"   Train period: {train_df['day'].min()} to {train_df['day'].max()}")
 print(f"   Test period: {test_df['day'].min()} to {test_df['day'].max()}")
 print(f"   Log transform: {CONFIG['log_transform']}")
+
+# Show feature breakdown
+temporal_features = [f for f in feature_cols if any(x in f for x in ['dayofweek', 'holiday', 'weekend', 'month', 'season'])]
+weather_features = [f for f in feature_cols if any(x in f for x in ['temp', 'heating', 'cooling', 'humidity', 'wind'])]
+lag_features = [f for f in feature_cols if any(x in f for x in ['lag', 'roll'])]
+household_features = [f for f in feature_cols if any(x in f for x in ['hh_avg', 'hh_std', 'hh_max', 'hh_min', 'acorn', 'Acorn'])]
+interaction_features = [f for f in feature_cols if any(x in f for x in ['weekend_heating', 'holiday_heating', 'summer_cooling'])]
+consumption_features = [f for f in feature_cols if any(x in f for x in ['total', 'mean', 'peak', 'min', 'std', 'morning', 'afternoon', 'evening', 'night']) and 'hh_' not in f]
+
+print(f"\n📊 Feature breakdown:")
+print(f"   🕐 Temporal: {len(temporal_features)} features")
+print(f"   🌤️ Weather: {len(weather_features)} features") 
+print(f"   📈 Lag/Rolling: {len(lag_features)} features")
+print(f"   🏠 Household: {len(household_features)} features")
+print(f"   🔗 Interactions: {len(interaction_features)} features")
+print(f"   ⚡ Consumption: {len(consumption_features)} features")
 
 #%% ================================================================
 # STEP 2: HOUSEHOLD SELECTION AND DATA OVERVIEW
@@ -548,7 +530,6 @@ RESULTS_SUMMARY = {
     'feature_importance': day_ahead_results['feature_importance'],
     'features_used': len(feature_cols),
     'log_transform': CONFIG['log_transform'],
-    'critical_features_only': CONFIG['use_critical_features_only'],
     'config': CONFIG,
     'enhancements': {
         'automatic_leakage_validation': True,

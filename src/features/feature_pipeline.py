@@ -68,6 +68,11 @@ def create_comprehensive_features(df: pd.DataFrame) -> pd.DataFrame:
     if all(col in df.columns for col in ["is_holiday", "total_kwh"]):
         df["holiday_consumption_boost"] = df["is_holiday"] * df["total_kwh"]
     
+    # 🔧 CRITICAL FIX: Add missing critical features expected by notebooks
+    # Holiday-heating interaction (critical feature)
+    if all(col in df.columns for col in ["is_holiday", "heating_degree_days"]):
+        df["holiday_heating_interaction"] = df["is_holiday"] * df["heating_degree_days"]
+    
     print("✅ ALL COMPREHENSIVE FEATURES CREATED")
     print(f"📊 Final shape: {df.shape}")
     
@@ -102,7 +107,7 @@ def get_forecasting_feature_groups(df: pd.DataFrame) -> dict:
     Returns:
         Dictionary of feature groups
     """
-    exclude_patterns = ["LCLid", "day", "hh_", "holiday_type"]
+    exclude_patterns = ["LCLid", "day", "holiday_type"]
     all_cols = [col for col in df.columns 
                 if not any(pattern in col for pattern in exclude_patterns)
                 and not (col.startswith('hh_') and col.replace('hh_', '').isdigit())]
@@ -114,7 +119,7 @@ def get_forecasting_feature_groups(df: pd.DataFrame) -> dict:
         'weather': [c for c in all_cols if any(x in c for x in ['temp', 'heating', 'cooling', 'humidity', 'wind', 'cloud'])],
         'temporal': [c for c in all_cols if any(x in c for x in ['dayofweek', 'weekend', 'month', 'season', 'holiday'])],
         'time_series': [c for c in all_cols if any(x in c for x in ['lag', 'roll', 'delta', 'pct_change'])],
-        'household': [c for c in all_cols if any(x in c for x in ['acorn', 'hh_avg', 'daily_vs'])]
+        'household': [c for c in all_cols if any(x in c for x in ['acorn', 'hh_avg', 'hh_std', 'hh_max', 'hh_min', 'daily_vs'])]
     }
     
     return feature_groups
@@ -129,14 +134,14 @@ def get_forecasting_features(df: pd.DataFrame) -> list:
     Returns:
         List of feature column names
     """
-    exclude_patterns = ["LCLid", "day", "hh_", "holiday_type"]
+    exclude_patterns = ["LCLid", "day", "holiday_type"]
     feature_cols = []
     
     for col in df.columns:
         # Skip excluded patterns
         if any(pattern in col for pattern in exclude_patterns):
             continue
-        # Skip if it looks like raw half-hourly data
+        # Skip if it looks like raw half-hourly data (hh_0, hh_1, etc.) but NOT derived features
         if col.startswith('hh_') and col.replace('hh_', '').isdigit():
             continue
         feature_cols.append(col)

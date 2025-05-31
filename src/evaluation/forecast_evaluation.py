@@ -14,7 +14,6 @@ import numpy as np
 from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolute_percentage_error
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import LabelEncoder
-from prophet.diagnostics import cross_validation, performance_metrics
 from scipy import stats
 import warnings
 warnings.filterwarnings('ignore')
@@ -104,69 +103,11 @@ def evaluate_forecast_model(y_true: np.array,
     
     return metrics
 
-# Convenience functions for specific models
-def evaluate_prophet_forecast(y_true: np.array, 
-                             y_pred: np.array,
-                             model_name: str = "Prophet") -> dict:
-    """Evaluate Prophet forecast performance"""
-    return evaluate_forecast_model(y_true, y_pred, model_name)
-
 def evaluate_xgboost_forecast(y_true: np.array, 
                              y_pred: np.array,
                              model_name: str = "XGBoost") -> dict:
     """Evaluate XGBoost forecast performance"""
     return evaluate_forecast_model(y_true, y_pred, model_name)
-
-def prophet_cross_validation(train_df: pd.DataFrame,
-                            target_col: str = "total_kwh",
-                            initial: str = "730 days",
-                            period: str = "30 days", 
-                            horizon: str = "30 days") -> pd.DataFrame:
-    """
-    Perform time series cross-validation with Prophet
-    
-    Args:
-        train_df: Training dataframe
-        target_col: Target variable
-        initial: Initial training period
-        period: Spacing between cutoffs
-        horizon: Forecast horizon
-        
-    Returns:
-        Cross-validation results dataframe and metrics
-    """
-    print("🔄 Prophet Cross-Validation...")
-    
-    # Import here to avoid circular imports
-    from src.models.prophet_forecasting import prepare_prophet_data, create_prophet_model, add_prophet_regressors
-    
-    # Prepare data
-    prophet_df, regressor_cols = prepare_prophet_data(train_df, target_col)
-    
-    # Create and fit model
-    model = create_prophet_model()
-    if regressor_cols:
-        add_prophet_regressors(model, regressor_cols)
-    
-    model.fit(prophet_df)
-    
-    # Perform cross-validation
-    cv_results = cross_validation(
-        model, 
-        initial=initial,
-        period=period,
-        horizon=horizon,
-        parallel="processes"
-    )
-    
-    # Calculate performance metrics
-    cv_metrics = performance_metrics(cv_results)
-    
-    print("✅ Cross-validation completed")
-    print(f"📊 Average MAPE: {cv_metrics['mape'].mean():.2f}")
-    print(f"📊 Average MAE: {cv_metrics['mae'].mean():.3f}")
-    
-    return cv_results, cv_metrics
 
 def xgboost_time_series_cv(train_df: pd.DataFrame,
                           feature_cols: list,
