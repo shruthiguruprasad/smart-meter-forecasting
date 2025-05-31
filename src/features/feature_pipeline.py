@@ -24,8 +24,7 @@ from .consumption_features import (
 )
 
 from .temporal_features import (
-    create_all_temporal_features,
-    create_timeseries_features_safe
+    create_all_temporal_features
 )
 
 from .weather_features import (
@@ -139,7 +138,59 @@ def create_comprehensive_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def create_timeseries_features_safe(
+    df: pd.DataFrame,
+    target_col: str,
+    lags: list,
+    windows: list
+) -> pd.DataFrame:
+    """
+    Create leakage‐safe time-series features: lags and rolling means.
+    Each feature for day t references only total_kwh[t - k].
+    
+    Args:
+        df: DataFrame containing 'LCLid', 'day', and target_col (total_kwh).
+        target_col: Name of the raw consumption column, e.g. 'total_kwh'.
+        lags: List of integer lag days (e.g. [1, 7, 14]).
+        windows: List of integer rolling window sizes (e.g. [7, 14]).
+    Returns:
+        df with new columns:
+            - 'lag{lag}_total' for each lag
+            - 'roll{window}_total_mean' for each window (computed on shifted series)
+            - Optionally pct_change and delta fields
+    """
+    df = df.sort_values(["LCLid", "day"])
+    
+    # Create lag features
+    for lag in lags:
+        col_name = f"lag{lag}_total"
+        df[col_name] = df.groupby("LCLid")[target_col].shift(lag)
 
+    # Create rolling-window features on shifted target (shift by 1 to exclude current day)
+    for window in windows:
+        col_name = f"roll{window}_total_mean"
+        shifted = df.groupby("LCLid")[target_col].shift(1)
+        df[col_name] = (
+            shifted
+            .groupby(df["LCLid"])
+            .rolling(window, min_periods=1)
+            .mean()
+            .reset_index(level=0, drop=True)
+        )
+
+    # Optional: percent change and delta from previous lag (e.g. lag1 vs lag2)
+    if 1 in lags:
+        df["lag2_total"] = df.groupby("LCLid")[target_col].shift(2)
+        df["delta1_total"] = (df["lag1_total"] - df["lag2_total"]).fillna(0)
+        df["pct_change1_total"] = np.where(
+            df["lag2_total"].abs() > 0,
+            (df["lag1_total"] - df["lag2_total"]) / (df["lag2_total"] + 1e-6),
+            0
+        )
+        df = df.drop(columns=["lag2_total"], errors="ignore")
+
+    return df
+    
 # -----------------------------------------------------------------------------
 #  IF THIS MODULE IS RUN DIRECTLY
 # -----------------------------------------------------------------------------
