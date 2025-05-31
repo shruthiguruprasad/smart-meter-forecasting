@@ -10,7 +10,7 @@ Date: 2025
 """
 
 import pandas as pd
-from ..features.feature_pipeline import (
+from .feature_pipeline import (
     get_forecasting_features,
     get_forecasting_feature_groups,
     add_group_and_household_features
