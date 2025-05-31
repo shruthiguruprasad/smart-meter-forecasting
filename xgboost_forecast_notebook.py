@@ -95,34 +95,34 @@ if CONFIG['use_critical_features_only']:
     print("\n🎯 USING CRITICAL-ONLY FEATURE SET...")
     print("-" * 40)
     
-    # Define critical features based on our earlier analysis
+    # Define critical features for optimal performance
     critical_features = [
-        # Temporal/Calendar (cyclical encoding)
+        # Temporal/Calendar features
         'dayofweek_sin', 'dayofweek_cos', 'is_holiday', 'is_weekend',
-        # Lag/Rolling (autoregressive patterns)
+        # Lag/Rolling features (autoregressive patterns)
         'lag1_total', 'lag7_total', 'roll7_total_mean', 'roll14_total_mean',
-        # Weather (energy drivers)
+        # Weather features (energy drivers)
         'temp_avg', 'heating_degree_days', 'cooling_degree_days',
         # Household baseline
         'hh_avg_consumption',
-        # Optional interactions
+        # Interaction features
         'weekend_heating', 'holiday_heating_interaction'
     ]
     
-    # Filter to only features that actually exist in the data
+    # Filter to only features that exist in the data
     available_critical = [f for f in critical_features if f in feature_cols]
+    missing_critical = [f for f in critical_features if f not in feature_cols]
     
     print(f"📊 Available critical features: {len(available_critical)} out of {len(critical_features)} desired")
     print(f"📊 Using {len(available_critical)} critical features instead of {len(feature_cols)} total features")
     
-    # Show which critical features are missing
-    missing_critical = [f for f in critical_features if f not in feature_cols]
     if missing_critical:
         print(f"⚠️ Missing critical features: {missing_critical}")
+    else:
+        print("✅ All critical features are available!")
     
     feature_cols = available_critical
 
-# ✅ AUTOMATIC VALIDATION: The enhanced XGBoost module now handles data leakage validation
 print(f"\n✅ Enhanced data preparation completed:")
 print(f"   Training samples: {len(train_df):,}")
 print(f"   Validation samples: {len(val_df):,}")
@@ -522,12 +522,6 @@ if CONFIG['save_plots']:
 
 print(f"\n🔚 ENHANCED XGBOOST FORECASTING ANALYSIS COMPLETED!")
 print("=" * 60)
-
-# 📝 NOTE: File naming clarification
-print("\n📝 FILE NAMING NOTE:")
-print("   This file was originally named 'prophet_forecast_notebook.py' but")
-print("   contains XGBoost forecasting implementation, not Prophet.")
-print("   Consider renaming to 'xgboost_forecast_notebook.py' for clarity.")
 
 #%% ================================================================
 # FINAL RESULTS SUMMARY

@@ -203,8 +203,8 @@ def prepare_forecasting_data(df: pd.DataFrame,
     """
     print("📊 Preparing data for forecasting...")
     
-    # Get feature columns and groups
-    feature_cols = get_forecasting_features(df)
+    # Get initial feature columns and groups (will be updated after household features)
+    initial_feature_cols = get_forecasting_features(df)
     feature_groups = get_forecasting_feature_groups(df)
     
     # Ensure day column is datetime
@@ -226,6 +226,14 @@ def prepare_forecasting_data(df: pd.DataFrame,
     # Compute features on train only, then apply to val and test
     train_df, _ = add_group_and_household_features(train_df, pd.concat([val_df, test_df]))
     val_df, test_df = add_group_and_household_features(val_df, test_df)
+    
+    # 🔧 CRITICAL FIX: Update feature columns AFTER household features are added
+    print("🔄 Updating feature list to include household features...")
+    feature_cols = get_forecasting_features(train_df)  # Use train_df which now has all features
+    feature_groups = get_forecasting_feature_groups(train_df)  # Update groups too
+    
+    print(f"   ✅ Initial features: {len(initial_feature_cols)}")
+    print(f"   ✅ Final features: {len(feature_cols)} (+{len(feature_cols) - len(initial_feature_cols)} household features)")
     
     print(f"   ✅ Train: {len(train_df):,} rows ({train_df['LCLid'].nunique()} households)")
     print(f"   ✅ Validation: {len(val_df):,} rows ({val_df['LCLid'].nunique()} households)")
