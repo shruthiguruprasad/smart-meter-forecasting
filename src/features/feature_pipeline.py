@@ -24,7 +24,8 @@ from .consumption_features import (
 )
 
 from .temporal_features import (
-    create_all_temporal_features
+    create_all_temporal_features,
+    create_timeseries_features_safe
 )
 
 from .weather_features import (
