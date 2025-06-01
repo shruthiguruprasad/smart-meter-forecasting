@@ -204,48 +204,69 @@ def get_feature_columns(df: pd.DataFrame, exclude_patterns: List[str] = None) ->
     print(f"🎯 Selected {len(feature_cols)} feature columns")
     return feature_cols
 
-def reduce_memory_usage(df: pd.DataFrame) -> pd.DataFrame:
+def reduce_memory_footprint(df, verbose=True):
     """
-    Reduce memory usage by optimizing dtypes
+    Reduce memory usage of a dataframe by optimizing data types
     
     Args:
         df: Input dataframe
+        verbose: Whether to print memory usage information
         
     Returns:
         Memory-optimized dataframe
     """
-    print("🗜️ Reducing memory usage...")
-    
+    import numpy as np
+    import pandas as pd
+
     start_mem = df.memory_usage(deep=True).sum() / 1024**2
-    
+    if verbose:
+        print(f"Initial memory usage: {start_mem:.2f} MB")
+
     for col in df.columns:
-        if df[col].dtype == 'object':
-            continue
-            
-        col_type = df[col].dtype
-        
-        if str(col_type)[:3] == 'int':
+        col_type = df[col].dtypes
+
+        if pd.api.types.is_numeric_dtype(col_type):
             c_min = df[col].min()
             c_max = df[col].max()
-            
-            if c_min > np.iinfo(np.int8).min and c_max < np.iinfo(np.int8).max:
-                df[col] = df[col].astype(np.int8)
-            elif c_min > np.iinfo(np.int16).min and c_max < np.iinfo(np.int16).max:
-                df[col] = df[col].astype(np.int16)
-            elif c_min > np.iinfo(np.int32).min and c_max < np.iinfo(np.int32).max:
-                df[col] = df[col].astype(np.int32)
-        
-        elif str(col_type)[:5] == 'float':
-            c_min = df[col].min()
-            c_max = df[col].max()
-            
-            if c_min > np.finfo(np.float16).min and c_max < np.finfo(np.float16).max:
-                df[col] = df[col].astype(np.float32)
-    
+
+            if pd.api.types.is_integer_dtype(col_type):
+                if c_min >= 0:
+                    if c_max < 2**8:
+                        df[col] = df[col].astype(np.uint8)
+                    elif c_max < 2**16:
+                        df[col] = df[col].astype(np.uint16)
+                    elif c_max < 2**32:
+                        df[col] = df[col].astype(np.uint32)
+                    else:
+                        df[col] = df[col].astype(np.uint64)
+                else:
+                    if np.iinfo(np.int8).min < c_min < np.iinfo(np.int8).max:
+                        df[col] = df[col].astype(np.int8)
+                    elif np.iinfo(np.int16).min < c_min < np.iinfo(np.int16).max:
+                        df[col] = df[col].astype(np.int16)
+                    elif np.iinfo(np.int32).min < c_min < np.iinfo(np.int32).max:
+                        df[col] = df[col].astype(np.int32)
+                    else:
+                        df[col] = df[col].astype(np.int64)
+
+            else:  # float
+                if np.finfo(np.float16).min < c_min < np.finfo(np.float16).max:
+                    df[col] = df[col].astype(np.float16)
+                elif np.finfo(np.float32).min < c_min < np.finfo(np.float32).max:
+                    df[col] = df[col].astype(np.float32)
+                else:
+                    df[col] = df[col].astype(np.float64)
+
+        elif col_type == object:
+            num_unique = df[col].nunique()
+            num_total = len(df[col])
+            if num_unique / num_total < 0.5:
+                df[col] = df[col].astype('category')
+
     end_mem = df.memory_usage(deep=True).sum() / 1024**2
-    reduction = (start_mem - end_mem) / start_mem * 100
-    
-    print(f"   ✅ Memory reduced: {start_mem:.1f}MB → {end_mem:.1f}MB ({reduction:.1f}%)")
+    if verbose:
+        print(f"Reduced memory usage: {end_mem:.2f} MB ({100 * (start_mem - end_mem) / start_mem:.1f}% reduction)")
+
     return df
 
 def get_household_sample(df: pd.DataFrame, 
@@ -347,4 +368,4 @@ def print_data_quality(df: pd.DataFrame):
 
 if __name__ == "__main__":
     print("🔧 Helpers Module")
-    print("Usage: from src.utils.helpers import save_data, load_data") 
+    print("Usage: from src.utils.helpers import reduce_memory_footprint") 
