@@ -26,12 +26,17 @@ def plot_feature_importance(
     """
     Plot the top‐N features by XGBoost importance (default = "gain").
 
+    This function handles two possible key formats from xgb_model.get_score():
+      - If keys are "f0", "f1", ... then it maps them via feature_names list.
+      - Otherwise, it treats each key as the actual feature name.
+
     Parameters
     ----------
     xgb_model : xgboost.Booster
         Trained XGBoost model.
     feature_names : list of str
-        List of feature names in the same order they were passed to XGBoost.
+        List of feature names in the same order they were passed to XGBoost
+        (only used if get_score keys are numeric indices like "f0", "f1", ...).
     top_n : int, default 15
         Number of top features to display.
     importance_type : str, default "gain"
@@ -41,19 +46,28 @@ def plot_feature_importance(
     title : str, default "Feature Importance"
         Title for the plot.
     """
-    # Raw importance from model: keys like "f0", "f1" → numeric indices
     raw_imp = xgb_model.get_score(importance_type=importance_type)
     if not raw_imp:
         print("⚠️  No feature importance to display.")
         return
 
-    # Map "f0" → feature_names[0], etc.
     mapped = {}
     for key, val in raw_imp.items():
-        idx = int(key[1:])
-        mapped[feature_names[idx]] = val
+        # Case 1: key looks like "f12" → numeric index into feature_names
+        if key.startswith("f") and key[1:].isdigit():
+            idx = int(key[1:])
+            if 0 <= idx < len(feature_names):
+                fname = feature_names[idx]
+            else:
+                # Fallback if index out of range
+                fname = key
+        else:
+            # Case 2: key is already the actual feature name
+            fname = key
 
-    # Sort by value descending
+        mapped[fname] = val
+
+    # Sort by importance descending and take top_n
     sorted_items = sorted(mapped.items(), key=lambda x: x[1], reverse=True)[:top_n]
     feats, gains = zip(*sorted_items)
 
@@ -63,6 +77,7 @@ def plot_feature_importance(
     plt.title(f"📊 {title}")
     plt.tight_layout()
     plt.show()
+
 
 
 def plot_actual_vs_predicted(
