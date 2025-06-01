@@ -166,16 +166,15 @@ def create_timeseries_features_safe(
         col_name = f"lag{lag}_total"
         df[col_name] = df.groupby("LCLid")[target_col].shift(lag)
 
-    # Create rolling-window features on shifted target (shift by 1 to exclude current day)
+    # Create rolling-window features on shifted target (
     for window in windows:
-        col_name = f"roll{window}_total_mean"
-        shifted = df.groupby("LCLid")[target_col].shift(1)
-        df[col_name] = (
-            shifted
-            .groupby(df["LCLid"])
-            .rolling(window, min_periods=1)
-            .mean()
-            .reset_index(level=0, drop=True)
+        # Make a “t−1” series, then rolling on that
+        temp = df.groupby("LCLid")[target_col].shift(1)
+        df[f"roll{window}_total_mean"] = (
+            temp.groupby(df["LCLid"])
+                .rolling(window, min_periods=1)
+                .mean()
+                .reset_index(level=0, drop=True)
         )
 
     # Optional: percent change and delta from previous lag (e.g. lag1 vs lag2)
