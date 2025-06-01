@@ -346,7 +346,7 @@ def train_and_evaluate_dayahead(
 ) -> dict:
     """
     Day‐ahead (h=1) pipeline with Optuna tuning.
-    Returns dict with best_params, model, feature_importance, metrics, predictions, actuals.
+    Returns dict with best_params, model, feature_importance, predictions, actuals.
     
     Args:
         train_df, val_df, test_df: DataFrames with features and target
@@ -362,14 +362,6 @@ def train_and_evaluate_dayahead(
     """
     print("🚀 DAY-AHEAD FORECASTING PIPELINE")
     print("=" * 40)
-    
-    # Try importing evaluation functions
-    try:
-        from ..evaluation.forecast_evaluation import compute_regression_metrics, print_regression_results
-    except ImportError:
-        print("⚠️ Warning: Could not import evaluation functions. Will return raw predictions.")
-        compute_regression_metrics = None
-        print_regression_results = None
 
     data_dict = prepare_xgboost_data(
         train_df, val_df, test_df,
@@ -408,28 +400,12 @@ def train_and_evaluate_dayahead(
     y_val_pred   = predict_xgboost(model, data_dict["X_val"],   log_transform=log_transform)
     y_test_pred  = predict_xgboost(model, data_dict["X_test"],  log_transform=log_transform)
 
-    # Compute metrics if evaluation functions available
-    metrics = {}
-    if compute_regression_metrics is not None:
-        metrics = {
-            "train": compute_regression_metrics(y_train_true, y_train_pred),
-            "val":   compute_regression_metrics(y_val_true,   y_val_pred),
-            "test":  compute_regression_metrics(y_test_true,  y_test_pred)
-        }
-
-        print("\n📈 DAY‐AHEAD PERFORMANCE (Final Model):")
-        print("   Train Metrics:")
-        print_regression_results(metrics["train"], prefix="Train")
-        print("   Validation Metrics:")
-        print_regression_results(metrics["val"], prefix="Val")
-        print("   Test Metrics:")
-        print_regression_results(metrics["test"], prefix="Test")
+    print("\n✅ Day-ahead model training completed!")
 
     return {
         "best_params": best_params,
         "model": model,
         "feature_importance": model_dict["feature_importance"],
-        "metrics": metrics,
         "predictions": {
             "train": y_train_pred,
             "val":   y_val_pred,
@@ -471,14 +447,6 @@ def train_and_evaluate_weekahead(
     """
     print("🚀 WEEK-AHEAD FORECASTING PIPELINE")
     print("=" * 40)
-    
-    # Try importing evaluation functions
-    try:
-        from ..evaluation.forecast_evaluation import compute_regression_metrics, print_regression_results
-    except ImportError:
-        print("⚠️ Warning: Could not import evaluation functions. Will return raw predictions.")
-        compute_regression_metrics = None
-        print_regression_results = None
 
     data_dict = prepare_xgboost_data(
         train_df, val_df, test_df,
@@ -517,28 +485,12 @@ def train_and_evaluate_weekahead(
     y_val_pred   = predict_xgboost(model, data_dict["X_val"],   log_transform=log_transform)
     y_test_pred  = predict_xgboost(model, data_dict["X_test"],  log_transform=log_transform)
 
-    # Compute metrics if evaluation functions available
-    metrics = {}
-    if compute_regression_metrics is not None:
-        metrics = {
-            "train": compute_regression_metrics(y_train_true, y_train_pred),
-            "val":   compute_regression_metrics(y_val_true,   y_val_pred),
-            "test":  compute_regression_metrics(y_test_true,  y_test_pred)
-        }
-
-        print("\n📈 WEEK‐AHEAD PERFORMANCE (Final Model):")
-        print("   Train Metrics:")
-        print_regression_results(metrics["train"], prefix="Train")
-        print("   Validation Metrics:")
-        print_regression_results(metrics["val"], prefix="Val")
-        print("   Test Metrics:")
-        print_regression_results(metrics["test"], prefix="Test")
+    print("\n✅ Week-ahead model training completed!")
 
     return {
         "best_params": best_params,
         "model": model,
         "feature_importance": model_dict["feature_importance"],
-        "metrics": metrics,
         "predictions": {
             "train": y_train_pred,
             "val":   y_val_pred,

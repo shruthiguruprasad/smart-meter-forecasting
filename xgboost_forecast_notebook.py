@@ -52,7 +52,7 @@ CONFIG = {
     'plot_dir': 'plots/xgboost_notebook/',
     'use_gpu': False,  # Set to True if you have GPU
     'log_transform': True,  # Use log transform for relative error modeling
-    'n_trials': 30,  # Optuna optimization trials
+    'n_trials': 60,  # Optuna optimization trials
     'seed': 42
 }
 
@@ -194,10 +194,13 @@ day_ahead_results = train_and_evaluate_dayahead(
 
 print("✅ Day-ahead forecasting completed!")
 
-# Extract key results
-day_metrics = day_ahead_results['metrics']['test']
+
+from evaluation.forecast_evaluation import compute_regression_metrics
+
 y_true_day = day_ahead_results['actuals']['test']
 y_pred_day = day_ahead_results['predictions']['test']
+day_metrics = compute_regression_metrics(y_true_day, y_pred_day)
+
 dates_day = household_test['day'].values
 
 print(f"\n📈 DAY-AHEAD RESULTS:")
@@ -234,9 +237,9 @@ week_ahead_results = train_and_evaluate_weekahead(
 print("✅ Week-ahead forecasting completed!")
 
 # Extract key results
-week_metrics = week_ahead_results['metrics']['test']
 y_true_week = week_ahead_results['actuals']['test']
 y_pred_week = week_ahead_results['predictions']['test']
+week_metrics = compute_regression_metrics(y_true_week, y_pred_week)
 
 print(f"\n📅 WEEK-AHEAD RESULTS:")
 print_regression_results(week_metrics, "Test Set")
@@ -281,191 +284,4 @@ print("-" * 45)
 day_peak_analysis = evaluate_peak_performance(y_true_day, y_pred_day, 90)
 week_peak_analysis = evaluate_peak_performance(y_true_week, y_pred_week, 90)
 
-#%% ================================================================
-# STEP 8: VISUALIZATIONS
-#%% ================================================================
 
-print("\n8️⃣ STEP 8: VISUALIZATIONS")
-print("-" * 30)
-
-# Create plots directory
-import os
-if CONFIG['save_plots']:
-    os.makedirs(CONFIG['plot_dir'], exist_ok=True)
-    print(f"📁 Plots will be saved to: {CONFIG['plot_dir']}")
-
-# 1. Feature Importance Plot
-print("📊 Creating feature importance plot...")
-plt.figure(figsize=(12, 8))
-top_features = day_ahead_results['feature_importance'].head(15)
-plt.barh(range(len(top_features)), top_features['importance'])
-plt.yticks(range(len(top_features)), top_features['feature'])
-plt.xlabel('Feature Importance')
-plt.title('Top 15 Most Important Features - Enhanced XGBoost')
-plt.gca().invert_yaxis()
-plt.tight_layout()
-
-if CONFIG['save_plots']:
-    plt.savefig(f"{CONFIG['plot_dir']}feature_importance.png", dpi=300, bbox_inches='tight')
-plt.show()
-
-# 2. Day-ahead Forecast Plot
-print("📈 Creating day-ahead forecast plot...")
-plt.figure(figsize=(15, 6))
-plt.plot(dates_day, y_true_day, 'o-', label='Actual', alpha=0.8, markersize=4)
-plt.plot(dates_day, y_pred_day, 's-', label='Predicted', alpha=0.8, markersize=4)
-plt.xlabel('Date')
-plt.ylabel('Energy Consumption (kWh)')
-plt.title(f'Day-Ahead Forecast - Household {selected_household}')
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.xticks(rotation=45)
-plt.tight_layout()
-
-if CONFIG['save_plots']:
-    plt.savefig(f"{CONFIG['plot_dir']}day_ahead_forecast.png", dpi=300, bbox_inches='tight')
-plt.show()
-
-# 3. Week-ahead Forecast Visualization
-print("📅 Creating week-ahead forecast plot...")
-# Reshape week data for visualization
-n_weeks = min(4, len(y_true_week) // 7)  # Show first 4 complete weeks
-fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-fig.suptitle(f'Week-Ahead Forecasting - Household {selected_household}', fontsize=16)
-
-for i in range(n_weeks):
-    row, col = i // 2, i % 2
-    start_idx = i * 7
-    end_idx = start_idx + 7
-    
-    week_actual = y_true_week[start_idx:end_idx]
-    week_pred = y_pred_week[start_idx:end_idx]
-    days = range(1, len(week_actual) + 1)
-    
-    axes[row, col].plot(days, week_actual, 'o-', label='Actual', linewidth=2, markersize=6)
-    axes[row, col].plot(days, week_pred, 's-', label='Predicted', linewidth=2, markersize=6)
-    axes[row, col].set_title(f'Week {i+1}')
-    axes[row, col].set_xlabel('Day of Week')
-    axes[row, col].set_ylabel('Energy (kWh)')
-    axes[row, col].legend()
-    axes[row, col].grid(True, alpha=0.3)
-
-plt.tight_layout()
-if CONFIG['save_plots']:
-    plt.savefig(f"{CONFIG['plot_dir']}week_ahead_forecast.png", dpi=300, bbox_inches='tight')
-plt.show()
-
-# 4. Performance Comparison Plot
-print("📊 Creating performance comparison plot...")
-fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-fig.suptitle('Enhanced XGBoost Performance Analysis', fontsize=16)
-
-# Metric comparison
-metrics_df = pd.DataFrame({
-    'Day-Ahead': [day_metrics['MAE'], day_metrics['RMSE'], day_metrics['MAPE'], day_metrics['R2']],
-    'Week-Ahead': [week_metrics['MAE'], week_metrics['RMSE'], week_metrics['MAPE'], week_metrics['R2']]
-}, index=['MAE', 'RMSE', 'MAPE', 'R²'])
-
-metrics_df.plot(kind='bar', ax=axes[0, 0])
-axes[0, 0].set_title('Performance Metrics Comparison')
-axes[0, 0].set_ylabel('Metric Value')
-axes[0, 0].tick_params(axis='x', rotation=45)
-
-# Residual analysis
-day_residuals = y_true_day - y_pred_day
-week_residuals = y_true_week - y_pred_week
-
-axes[0, 1].hist(day_residuals, bins=20, alpha=0.7, label='Day-Ahead', edgecolor='black')
-axes[0, 1].hist(week_residuals, bins=20, alpha=0.7, label='Week-Ahead', edgecolor='black')
-axes[0, 1].axvline(x=0, color='red', linestyle='--')
-axes[0, 1].set_xlabel('Residuals (kWh)')
-axes[0, 1].set_ylabel('Frequency')
-axes[0, 1].set_title('Residual Distribution')
-axes[0, 1].legend()
-
-# Scatter plots
-axes[1, 0].scatter(y_true_day, y_pred_day, alpha=0.6, label='Day-Ahead')
-axes[1, 0].plot([y_true_day.min(), y_true_day.max()], [y_true_day.min(), y_true_day.max()], 'r--')
-axes[1, 0].set_xlabel('Actual (kWh)')
-axes[1, 0].set_ylabel('Predicted (kWh)')
-axes[1, 0].set_title('Predicted vs Actual: Day-Ahead')
-
-axes[1, 1].scatter(y_true_week, y_pred_week, alpha=0.6, label='Week-Ahead', color='orange')
-axes[1, 1].plot([y_true_week.min(), y_true_week.max()], [y_true_week.min(), y_true_week.max()], 'r--')
-axes[1, 1].set_xlabel('Actual (kWh)')
-axes[1, 1].set_ylabel('Predicted (kWh)')
-axes[1, 1].set_title('Predicted vs Actual: Week-Ahead')
-
-plt.tight_layout()
-if CONFIG['save_plots']:
-    plt.savefig(f"{CONFIG['plot_dir']}performance_analysis.png", dpi=300, bbox_inches='tight')
-plt.show()
-
-print("✅ All visualizations completed!")
-
-#%% ================================================================
-# FINAL RESULTS SUMMARY
-#%% ================================================================
-
-print("\n🎯 FINAL RESULTS SUMMARY")
-print("=" * 40)
-
-# Create comprehensive results summary
-RESULTS_SUMMARY = {
-    'household_id': selected_household,
-    'config': CONFIG,
-    'data_overview': {
-        'train_samples': len(train_df),
-        'val_samples': len(val_df),
-        'test_samples': len(test_df),
-        'features_used': len(feature_cols),
-        'feature_groups': feature_groups
-    },
-    'day_ahead': {
-        'results': day_ahead_results,
-        'best_params': day_ahead_results['best_params'],
-        'test_metrics': day_metrics,
-        'peak_analysis': day_peak_analysis
-    },
-    'week_ahead': {
-        'results': week_ahead_results,
-        'best_params': week_ahead_results['best_params'],
-        'test_metrics': week_metrics,
-        'peak_analysis': week_peak_analysis
-    },
-    'model_comparison': comparison_df,
-    'pipeline_features': {
-        'clean_architecture': True,
-        'leakage_safe_features': True,
-        'optuna_optimization': True,
-        'gpu_acceleration': CONFIG['use_gpu'],
-        'log_transform': CONFIG['log_transform'],
-        'comprehensive_evaluation': True
-    }
-}
-
-print("🎯 PERFORMANCE SUMMARY:")
-print(f"   📈 Day-Ahead:")
-print(f"      MAE: {day_metrics['MAE']:.3f} kWh")
-print(f"      MAPE: {day_metrics['MAPE']:.2f}%")
-print(f"      R²: {day_metrics['R2']:.3f}")
-print(f"   📅 Week-Ahead:")
-print(f"      MAE: {week_metrics['MAE']:.3f} kWh")
-print(f"      MAPE: {week_metrics['MAPE']:.2f}%")
-print(f"      R²: {week_metrics['R2']:.3f}")
-
-print(f"\n🏆 BEST PERFORMING MODEL:")
-best_model = comparison_df.iloc[0]['Model'] if not comparison_df.empty else "Day-Ahead XGBoost"
-print(f"   {best_model}")
-
-print(f"\n💾 RESULTS ACCESS:")
-print(f"   📊 Complete results: RESULTS_SUMMARY")
-print(f"   📈 Day-ahead model: RESULTS_SUMMARY['day_ahead']['results']['model']")
-print(f"   📅 Week-ahead model: RESULTS_SUMMARY['week_ahead']['results']['model']")
-print(f"   🎯 Feature importance: RESULTS_SUMMARY['day_ahead']['results']['feature_importance']")
-
-print(f"\n✅ Enhanced XGBoost forecasting pipeline completed successfully!")
-print(f"   🔧 Total features engineered: {len(feature_cols)}")
-print(f"   🎯 Optuna trials completed: {CONFIG['n_trials']}")
-print(f"   📊 Models trained and evaluated: 2")
-print(f"   📁 Plots saved: {CONFIG['save_plots']}")
