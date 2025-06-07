@@ -15,7 +15,7 @@ def plot_cluster_stability_analysis(df_hh, cluster_col="cluster"):
     print("=" * 60)
     
     # Prepare features if needed
-    df = prepare_plotting_features(df_hh)
+    df = df_hh
     
     # Filter and prepare data
     df_stability = df[["LCLid", "day", cluster_col]].dropna()

@@ -11,7 +11,7 @@ def plot_cluster_switching_analysis(df_hh, cluster_col="cluster"):
     Returns the switch counts for use in timeline plotting
     """
     # Prepare features if needed
-    df = prepare_plotting_features(df_hh)
+    df = df_hh
     
     # Calculate switching statistics
     df_switch = df[["LCLid", "day", cluster_col]].dropna()
@@ -98,7 +98,7 @@ def plot_cluster_timelines(df_hh, switch_counts, top_n=5, cluster_col="cluster")
     Plot cluster assignment timelines for the most volatile households
     """
     # Prepare features if needed
-    df = prepare_plotting_features(df_hh)
+    df = df_hh
     
     # Sort households by switch rate
     if isinstance(switch_counts, pd.DataFrame) and "switch_rate" in switch_counts.columns:
@@ -130,7 +130,7 @@ def plot_cluster_evolution(df_hh, cluster_col="cluster"):
     Plot the evolution of cluster distributions over time
     """
     # Prepare features if needed
-    df = prepare_plotting_features(df_hh)
+    df = df_hh
     
     plt.figure(figsize=(14, 6))
     df["day"] = pd.to_datetime(df["day"])
@@ -152,7 +152,7 @@ def plot_pattern_stability_analysis(df_hh, cluster_col="cluster"):
     Shows how patterns evolve month-by-month for each cluster
     """
     # Prepare features if needed
-    df = prepare_plotting_features(df_hh)
+    df = df_hh
     
     # Check if we have time-based data
     if "day" not in df.columns:
@@ -221,7 +221,7 @@ def plot_seasonal_load_signature_grid(df_hh, cluster_col="cluster"):
     - Pattern Variability by Season (daily variability measures)
     """
     # Prepare features if needed
-    df = prepare_plotting_features(df_hh)
+    df = df_hh
     
     # Check for required columns
     if "day" not in df.columns:
@@ -364,7 +364,7 @@ def plot_pattern_evolution_analysis(df_hh, cluster_col="cluster"):
     Analyze and visualize the evolution of consumption patterns over time
     """
     # Prepare features if needed
-    df = prepare_plotting_features(df_hh)
+    df = df_hh
     
     # Check if we have time-based data
     if "day" not in df.columns:

@@ -9,7 +9,7 @@ def plot_hdd_vs_kwh(df_hh, cluster_col="cluster"):
     Plot the relationship between heating degree days and consumption by cluster
     """
     # Prepare features if needed
-    df = prepare_plotting_features(df_hh)
+    df = df_hh
     
     df_weather = df[(df["total_kwh"].notna()) & 
                     (df["heating_degree_days"].notna()) & 
@@ -41,7 +41,7 @@ def plot_weather_impact_analysis(df_hh, cluster_col="cluster"):
     - Average daily load profile by temperature range
     """
     # Prepare features if needed
-    df = prepare_plotting_features(df_hh)
+    df = df_hh
     
     # Filter data
     df_weather = df[(df["total_kwh"].notna()) & 
@@ -164,7 +164,7 @@ def plot_seasonal_weather_patterns(df_hh, cluster_col="cluster"):
     - Seasonal consumption patterns
     """
     # Prepare features if needed
-    df = prepare_plotting_features(df_hh)
+    df = df_hh
     
     # Check if required columns exist
     required_cols = ["season", "temperatureMax", "humidity", "total_kwh"]
@@ -238,7 +238,7 @@ def plot_weather_impact_by_acorn(df_hh, cluster_col="cluster"):
     broken down by cluster.
     """
     # Prepare features if needed
-    df = prepare_plotting_features(df_hh)
+    df = df_hh
     
     # Check if required columns exist
     if "Acorn_grouped" not in df.columns:
@@ -300,7 +300,7 @@ def plot_extreme_weather_impact(df_hh, cluster_col="cluster"):
     (very hot or very cold days).
     """
     # Prepare features if needed
-    df = prepare_plotting_features(df_hh)
+    df = df_hh
     
     # Check if required columns exist
     if "temperatureMax" not in df.columns and "heating_degree_days" not in df.columns:

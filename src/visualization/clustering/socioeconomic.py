@@ -45,7 +45,7 @@ def plot_acorn_distribution(df_hh, cluster_col="cluster"):
     Plot the distribution of ACORN groups by cluster
     """
     # Prepare features if needed
-    df = prepare_plotting_features(df_hh)
+    df = df_hh
     
     if "Acorn_grouped" not in df.columns:
         print("⚠️ Acorn_grouped column not found in the dataset. Unable to plot ACORN distribution.")
@@ -82,7 +82,7 @@ def plot_socioeconomic_intervention_analysis(df_hh, cluster_col="cluster"):
     - Intervention Priority Matrix (consumption vs variability)
     """
     # Prepare features if needed
-    df = prepare_plotting_features(df_hh)
+    df = df_hh
     
     # Check if socioeconomic data is available
     if "Acorn_grouped" not in df.columns:
