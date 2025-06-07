@@ -60,9 +60,10 @@ def plot_cluster_stability_analysis(df_hh, cluster_col="cluster"):
             "stability_score": stability_score,
             "month_count": month_count
         }
-    
-    # Convert to DataFrame
+      # Convert to DataFrame
     stability_df = pd.DataFrame.from_dict(stability_data, orient="index")
+    # Reset index to convert LCLid from index to column
+    stability_df = stability_df.reset_index().rename(columns={"index": "LCLid"})
     
     # 1. Distribution of stability scores
     plt.figure(figsize=(10, 6))
@@ -134,28 +135,30 @@ def plot_cluster_stability_analysis(df_hh, cluster_col="cluster"):
                     print(f"✅ Significant difference in stability between {group_names[0]} and {group_names[1]}")
                 else:
                     print(f"❌ No significant difference in stability between {group_names[0]} and {group_names[1]}")
-    
-    # 5. Relationship between stability and consumption
-    plt.figure(figsize=(10, 5))
-    consumption_stability = stability_df.merge(
-        df.groupby("LCLid")["total_kwh"].mean().reset_index(), 
-        on="LCLid",
-        how="left"
-    )
-    
-    sns.scatterplot(
-        data=consumption_stability, 
-        x="total_kwh", 
-        y="stability_score", 
-        alpha=0.5,
-        hue="month_count" if consumption_stability["month_count"].nunique() > 1 else None
-    )
-    plt.title("Cluster Stability vs. Average Consumption")
-    plt.xlabel("Average Daily Consumption (kWh)")
-    plt.ylabel("Stability Score")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.show()
+      # 5. Relationship between stability and consumption
+    if "total_kwh" in df.columns:
+        plt.figure(figsize=(10, 5))
+        consumption_stability = stability_df.merge(
+            df.groupby("LCLid")["total_kwh"].mean().reset_index(), 
+            on="LCLid",
+            how="left"
+        )
+        
+        sns.scatterplot(
+            data=consumption_stability, 
+            x="total_kwh", 
+            y="stability_score", 
+            alpha=0.5,
+            hue="month_count" if consumption_stability["month_count"].nunique() > 1 else None
+        )
+        plt.title("Cluster Stability vs. Average Consumption")
+        plt.xlabel("Average Daily Consumption (kWh)")
+        plt.ylabel("Stability Score")
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.show()
+    else:
+        print("⚠️ 'total_kwh' column not found. Skipping consumption vs. stability analysis.")
     
     # Return the stability scores for further analysis
     print("\n✅ Cluster Stability Analysis Complete!")
