@@ -3,7 +3,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
-from .core import prepare_plotting_features, hh_cols
 
 def plot_cluster_switching_analysis(df_hh, cluster_col="cluster"):
     """
@@ -252,8 +251,7 @@ def plot_seasonal_load_signature_grid(df_hh, cluster_col="cluster"):
     # 1. Seasonal Load Signature Evolution (top-left)
     # Calculate monthly average by cluster
     monthly_data = df_plot.groupby([df_plot["day"].dt.to_period("M"), cluster_col])["total_kwh"].mean().unstack()
-    
-    # Plot monthly evolution
+      # Plot monthly evolution
     for cluster in sorted(df_plot[cluster_col].unique()):
         if cluster in monthly_data.columns:
             ax1.plot(range(len(monthly_data.index)), monthly_data[cluster], 
@@ -262,13 +260,16 @@ def plot_seasonal_load_signature_grid(df_hh, cluster_col="cluster"):
     # Format x-axis with month labels
     if len(monthly_data.index) > 0:
         month_labels = [str(idx).split("-")[1] for idx in monthly_data.index]
-        ax1.set_xticks(range(len(month_labels)))
         
         # Show a subset of labels if there are many months
         if len(month_labels) > 12:
             step = len(month_labels) // 12 + 1
-            ax1.set_xticklabels(month_labels[::step])
+            # Use the same step for both ticks and labels to ensure they match
+            tick_positions = range(0, len(month_labels), step)
+            ax1.set_xticks(tick_positions)
+            ax1.set_xticklabels([month_labels[i] for i in tick_positions])
         else:
+            ax1.set_xticks(range(len(month_labels)))
             ax1.set_xticklabels(month_labels)
             
     ax1.set_title("Seasonal Load Signature Evolution", fontsize=12, fontweight='bold')
@@ -406,67 +407,8 @@ def plot_pattern_evolution_analysis(df_hh, cluster_col="cluster"):
     plt.legend(title="Cluster")
     plt.tight_layout()
     plt.show()
-    
-    # 5. Seasonal patterns by cluster over time
-    if "season" in df_evol.columns:
-        plt.figure(figsize=(14, 8))
-        seasonal_consumption = df_evol.groupby(["year", "season", cluster_col])["total_kwh"].mean().unstack()
-        
-        for year in df_evol["year"].unique():
-            if year in seasonal_consumption.index.get_level_values(0):
-                plt.subplot(1, len(df_evol["year"].unique()), 
-                           list(df_evol["year"].unique()).index(year) + 1)
-                
-                year_data = seasonal_consumption.loc[year]
-                year_data.plot(kind="bar", colormap="viridis")
-                plt.title(f"Seasonal Consumption Patterns {year}")
-                plt.xlabel("Season")
-                plt.ylabel("Average Daily kWh")
-                plt.legend(title="Cluster")
-        
-        plt.tight_layout()
-        plt.show()
-    
-    # 6. Cluster transition heatmap
-    if len(df_evol["LCLid"].unique()) > 1:  # Only if we have multiple households
-        # Track transitions between months
-        transitions = []
-        
-        for lclid in df_evol["LCLid"].unique():
-            user_data = df_evol[df_evol["LCLid"] == lclid].sort_values("day")
-            
-            # Skip if we have only one record
-            if len(user_data) <= 1:
-                continue
-                
-            # Get pairs of consecutive cluster assignments
-            prev_clusters = user_data[cluster_col].values[:-1]
-            next_clusters = user_data[cluster_col].values[1:]
-            
-            for prev, next_c in zip(prev_clusters, next_clusters):
-                transitions.append((prev, next_c))
-        
-        if transitions:
-            # Create transition matrix
-            unique_clusters = sorted(df_evol[cluster_col].unique())
-            transition_matrix = pd.DataFrame(0, 
-                                           index=unique_clusters, 
-                                           columns=unique_clusters)
-            
-            for prev, next_c in transitions:
-                transition_matrix.loc[prev, next_c] += 1
-            
-            # Convert to percentages (row-wise)
-            transition_pct = transition_matrix.div(transition_matrix.sum(axis=1), axis=0) * 100
-            
-            # Plot heatmap
-            plt.figure(figsize=(10, 8))
-            sns.heatmap(transition_pct, annot=True, fmt=".1f", cmap="YlGnBu")
-            plt.title("Cluster Transition Probabilities (%)")
-            plt.xlabel("Next Cluster")
-            plt.ylabel("Previous Cluster")
-            plt.tight_layout()
-            plt.show()
+      # Removed cluster transition heatmap visualization to simplify output
+    # The heatmap showed the probability of households transitioning between clusters
     
     print("✅ Pattern Evolution Analysis Complete!")
     return df_evol

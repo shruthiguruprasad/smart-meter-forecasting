@@ -2,34 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from .core import prepare_plotting_features
-
-def plot_hdd_vs_kwh(df_hh, cluster_col="cluster"):
-    """
-    Plot the relationship between heating degree days and consumption by cluster
-    """
-    # Prepare features if needed
-    df = df_hh
-    
-    df_weather = df[(df["total_kwh"].notna()) & 
-                    (df["heating_degree_days"].notna()) & 
-                    (df[cluster_col].notna())]
-    df_weather[cluster_col] = df_weather[cluster_col].astype(int)
-    
-    sns.lmplot(
-        data=df_weather.sample(n=min(100_000, len(df_weather)), random_state=42),
-        x="heating_degree_days", y="total_kwh",
-        hue=cluster_col,
-        scatter_kws={"alpha": 0.05},
-        line_kws={"linewidth": 2},
-        height=5, aspect=1.5
-    )
-    plt.title("Cluster-wise Sensitivity to Heating Degree Days (HDD)")
-    plt.xlabel("HDD (Base 18°C)")
-    plt.ylabel("Total Daily kWh")
-    plt.tight_layout()
-    plt.show()
-    
+   
 def plot_weather_impact_analysis(df_hh, cluster_col="cluster"):
     """
     Analyze and visualize the impact of weather on different clusters in a 2x2 grid layout
@@ -152,7 +125,7 @@ def plot_weather_impact_analysis(df_hh, cluster_col="cluster"):
     plt.show()
     
     print("✅ Weather Impact Analysis Complete!")
-    return df_weather
+    return 
 
 def plot_seasonal_weather_patterns(df_hh, cluster_col="cluster"):
     """
@@ -230,67 +203,6 @@ def plot_seasonal_weather_patterns(df_hh, cluster_col="cluster"):
     print("✅ Seasonal Weather Patterns Analysis Complete!")
     return seasonal_weather
 
-def plot_weather_impact_by_acorn(df_hh, cluster_col="cluster"):
-    """
-    Analyze and visualize weather impact by socio-economic group (ACORN) and cluster
-    
-    This shows how different socio-economic groups respond to temperature changes,
-    broken down by cluster.
-    """
-    # Prepare features if needed
-    df = df_hh
-    
-    # Check if required columns exist
-    if "Acorn_grouped" not in df.columns:
-        print("⚠️ 'Acorn_grouped' column not found. Cannot create weather impact by ACORN plot.")
-        return None
-    
-    # Filter valid data
-    df_acorn = df.dropna(subset=[cluster_col, "total_kwh"])
-    df_acorn[cluster_col] = df_acorn[cluster_col].astype(int)
-    
-    # Check if temperature impact column exists, otherwise create it
-    if "temp_impact" in df_acorn.columns:
-        # Use existing temp_impact column
-        plt.figure(figsize=(14, 8))
-        sns.boxplot(data=df_acorn, x='Acorn_grouped', y='temp_impact', 
-                   hue=cluster_col, palette="viridis")
-        plt.title('Temperature Sensitivity by Socio-Economic Group', fontsize=14, fontweight='bold')
-        plt.xlabel('ACORN Group', fontsize=12)
-        plt.ylabel('Temperature Impact (correlation)', fontsize=12)
-        plt.tick_params(axis='x', rotation=45)
-        plt.legend(title="Cluster")
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.show()
-    else:
-        # Fallback: Create consumption by ACORN and temperature ranges
-        df_temp = df_acorn.copy()
-        
-        # Use temperatureMax if available, otherwise use heating_degree_days
-        if "temperatureMax" in df_temp.columns:
-            df_temp['temp_range'] = pd.cut(df_temp['temperatureMax'], 
-                                        bins=[-10, 5, 15, 25, 35], 
-                                        labels=['Cold', 'Cool', 'Mild', 'Warm'])
-        else:
-            df_temp['temp_range'] = pd.cut(df_temp['heating_degree_days'], 
-                                        bins=5, 
-                                        labels=["Very Warm", "Warm", "Moderate", "Cool", "Cold"])
-            
-        plt.figure(figsize=(14, 8))
-        sns.boxplot(data=df_temp, x='Acorn_grouped', y='total_kwh', 
-                   hue='temp_range', palette="viridis")
-        plt.title('Consumption by Socio-Economic Group & Temperature', fontsize=14, fontweight='bold')
-        plt.xlabel('ACORN Group', fontsize=12)
-        plt.ylabel('Total Daily kWh', fontsize=12)
-        plt.tick_params(axis='x', rotation=45)
-        plt.legend(title="Temperature Range")
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.show()
-    
-    print("✅ Weather Impact by Socio-Economic Group Analysis Complete!")
-    return df_acorn
 
 def plot_extreme_weather_impact(df_hh, cluster_col="cluster"):
     """
@@ -358,4 +270,4 @@ def plot_extreme_weather_impact(df_hh, cluster_col="cluster"):
     plt.show()
     
     print("✅ Extreme Weather Impact Analysis Complete!")
-    return extreme_weather
+    return 
