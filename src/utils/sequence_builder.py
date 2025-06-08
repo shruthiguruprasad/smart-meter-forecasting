@@ -3,7 +3,8 @@ src/utils/sequence_builder.py
 
 Utility functions to convert a feature‐engineered DataFrame into sliding‐window
 (“sequence”) inputs for LSTM training. Supports both global (all households)
-and per‐household sequence construction. Handles optional household_code alignment.
+and per‐household sequence construction. Handles optional household_code alignment,
+and can optionally return the target dates for plotting.
 
 Author: Shruthi Simha Chippagiri
 Date: 2025
@@ -62,43 +63,32 @@ def build_sequences(
     y_list = []
     hh_list = []
 
-    # Ensure correct order: group_col, then date
-    # (Assumes df already sorted by date; otherwise specify date_col sorting externally)
-    # Example: df.sort_values([group_col, "day"], inplace=True)
-
-    # Group by each household (LCLid)
     for hh, group_df in df.groupby(group_col):
-        # Work only with one household’s chronology
         group_df = group_df.reset_index(drop=True)
 
-        # If including household codes, extract that series
         if include_household:
             hh_series = group_df[household_col].values
 
-        # Extract feature array and target array for this household
-        features_array = group_df[feature_cols].values  # shape: (T, n_features)
-        target_array = group_df[target_col].values      # shape: (T,)
+        features_array = group_df[feature_cols].values
+        target_array = group_df[target_col].values
 
-        # Slide window over time steps
         for i in range(len(group_df) - seq_len):
             window_feats = features_array[i : i + seq_len]
-            window_target = target_array[i + seq_len]  # one‐step ahead (for label_1) or 7‐ahead (for label_7)
+            window_target = target_array[i + seq_len]
 
-            # Skip if any NaNs in window_feats or window_target
             if np.isnan(window_feats).any() or np.isnan(window_target):
                 continue
 
             X_list.append(window_feats)
             y_list.append(window_target)
             if include_household:
-                # Align hh code to the target step (i + seq_len)
                 hh_list.append(hh_series[i + seq_len])
 
-    X = np.stack(X_list, axis=0)  # (N, seq_len, n_features)
-    y = np.array(y_list, dtype=float)  # (N,)
+    X = np.stack(X_list, axis=0)
+    y = np.array(y_list, dtype=float)
 
     if include_household:
-        hh_codes = np.array(hh_list, dtype=int)  # (N,)
+        hh_codes = np.array(hh_list, dtype=int)
         return X, y, hh_codes
 
     return X, y
@@ -116,7 +106,7 @@ def build_global_sequences(
 ):
     """
     Convenience function to build sequences for train/val/test splits all at once.
-    Returns X_train, y_train, X_val, y_val, X_test, y_test (and optionally household codes).
+    Returns X_train, y_train, hh_train, X_val, y_val, hh_val, X_test, y_test, hh_test.
 
     Parameters
     ----------
@@ -138,11 +128,7 @@ def build_global_sequences(
     (X_train, y_train, hh_train,
      X_val,   y_val,   hh_val,
      X_test,  y_test,  hh_test)
-    where each X_* is shape (N_*, seq_len, n_features),
-          each y_* is shape (N_*,),
-          each hh_* is shape (N_*,) of integer codes.
     """
-    # Build sequences with household codes for each split
     X_train, y_train, hh_train = build_sequences(
         train_df, feature_cols, target_col, seq_len,
         group_col=group_col,
@@ -165,3 +151,109 @@ def build_global_sequences(
     return (X_train, y_train, hh_train,
             X_val,   y_val,   hh_val,
             X_test,  y_test,  hh_test)
+
+
+def build_sequences_with_dates(
+    df: pd.DataFrame,
+    feature_cols: list,
+    target_col: str,
+    seq_len: int,
+    group_col: str = "LCLid",
+    include_household: bool = False,
+    household_col: str = "household_code",
+    date_col: str = "day"
+):
+    """
+    Like build_sequences, but also returns the target date for each window.
+
+    Returns:
+      X : np.ndarray (N, seq_len, n_features)
+      y : np.ndarray (N,)
+      hh_codes : np.ndarray (N,)  # only if include_household=True
+      dates  : np.ndarray (N,)    # the 'day' corresponding to the target for each sequence
+    """
+    X_list = []
+    y_list = []
+    hh_list = []
+    date_list = []
+
+    for hh, group_df in df.groupby(group_col):
+        group_df = group_df.reset_index(drop=True)
+
+        if include_household:
+            hh_series = group_df[household_col].values
+
+        features_array = group_df[feature_cols].values
+        target_array = group_df[target_col].values
+        date_array = pd.to_datetime(group_df[date_col]).values
+
+        for i in range(len(group_df) - seq_len):
+            window_feats = features_array[i : i + seq_len]
+            window_target = target_array[i + seq_len]
+            window_date = date_array[i + seq_len]
+
+            if np.isnan(window_feats).any() or np.isnan(window_target):
+                continue
+
+            X_list.append(window_feats)
+            y_list.append(window_target)
+            date_list.append(window_date)
+
+            if include_household:
+                hh_list.append(hh_series[i + seq_len])
+
+    X = np.stack(X_list, axis=0)
+    y = np.array(y_list, dtype=float)
+    dates = np.array(date_list, dtype="datetime64[ns]")
+
+    if include_household:
+        hh_codes = np.array(hh_list, dtype=int)
+        return X, y, hh_codes, dates
+
+    return X, y, dates
+
+
+def build_global_sequences_with_dates(
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    feature_cols: list,
+    target_col: str,
+    seq_len: int,
+    group_col: str = "LCLid",
+    household_col: str = "household_code",
+    date_col: str = "day"
+):
+    """
+    Calls build_sequences_with_dates on train/val/test and returns
+    (X_train, y_train, hh_train, date_train,
+     X_val,   y_val,   hh_val,   date_val,
+     X_test,  y_test,  hh_test,  date_test)
+    """
+    X_train, y_train, hh_train, date_train = build_sequences_with_dates(
+        train_df, feature_cols, target_col, seq_len,
+        group_col=group_col,
+        include_household=True,
+        household_col=household_col,
+        date_col=date_col
+    )
+    X_val, y_val, hh_val, date_val = build_sequences_with_dates(
+        val_df, feature_cols, target_col, seq_len,
+        group_col=group_col,
+        include_household=True,
+        household_col=household_col,
+        date_col=date_col
+    )
+    X_test, y_test, hh_test, date_test = build_sequences_with_dates(
+        test_df, feature_cols, target_col, seq_len,
+        group_col=group_col,
+        include_household=True,
+        household_col=household_col,
+        date_col=date_col
+    )
+
+    return (
+        X_train, y_train, hh_train, date_train,
+        X_val,   y_val,   hh_val,   date_val,
+        X_test,  y_test,  hh_test,  date_test
+    )
