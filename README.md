@@ -251,7 +251,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 📞 Contact
 
 **Shruthi Simha Chippagiri**  
-MSc Energy Transition and Data Science  
+Master of Business Data Science  
 University of Otago, Dunedin, NZ
 
 ---
