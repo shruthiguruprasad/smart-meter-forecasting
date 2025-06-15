@@ -252,7 +252,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Shruthi Simha Chippagiri**  
 MSc Energy Transition and Data Science  
-University of York
+University of Otago, Dunedin, NZ
 
 ---
 
