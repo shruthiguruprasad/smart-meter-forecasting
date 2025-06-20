@@ -173,7 +173,3 @@ analyzer.create_cluster_profiles()
 analyzer.plot_temporal_patterns()
 analyzer.plot_weather_sensitivity()
 ```
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
